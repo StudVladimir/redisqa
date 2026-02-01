@@ -2,8 +2,49 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        xmlns:views="using:redisqa.Views"
+        xmlns:vm="using:redisqa.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="700"
         x:Class="redisqa.MainWindow"
-        Title="redisqa">
-    Welcome to Avalonia!
+        x:DataType="vm:MainWindowViewModel"
+        Title="redisqa"
+        Width="1200" Height="700">
+        
+        <Grid ColumnDefinitions="250,*">
+                <Border Grid.Column="0" Background="#9c3535">
+                        <StackPanel Margin="20">
+
+                                <TextBlock Text="Menu" 
+                                        FontSize="24" 
+                                        FontWeight="Bold" 
+                                        Foreground="White" 
+                                        Margin="0,0,0,30"/>
+
+                                <Button x:Name="btnHome" 
+                                        Content="Home" 
+                                        Click="BtnHome_Click"
+                                        Margin="0,5"
+                                        HorizontalAlignment="Stretch"
+                                        Background="#3C3C3C"
+                                        Foreground="White"
+                                        Padding="15"/>
+
+                                <Button x:Name="BtnRedis" 
+                                        Content="🔴 Redis" 
+                                        Click="BtnRedis_Click"
+                                        Margin="0,5" 
+                                        HorizontalAlignment="Stretch"
+                                        Background="#3C3C3C"
+                                        Foreground="White"
+                                        Padding="15"/>
+                                
+                        </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Background="pink" Padding="40">
+                        <ContentControl Content="{Binding CurrentView}" />
+                </Border>
+
+        </Grid>
+
 </Window>
