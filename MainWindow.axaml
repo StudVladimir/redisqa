@@ -10,38 +10,185 @@
         Title="redisqa"
         Width="1200" Height="700">
         
-        <Grid ColumnDefinitions="250,*">
-                <Border Grid.Column="0" Background="#9c3535">
-                        <StackPanel Margin="20">
+        <Window.Styles>
+                <Style Selector="Button.db-button" x:DataType="Button">
+                        <Setter Property="Margin" Value="0,2"/>
+                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                        <Setter Property="Background" Value="#34495e80"/>
+                        <Setter Property="Foreground" Value="#ecf0f1"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Padding" Value="12,8"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                        <Setter Property="FontSize" Value="13"/>
+                </Style>
+                
+                <Style Selector="Button.tab-button" x:DataType="Button">
+                        <Setter Property="Margin" Value="0,4,0,0"/>
+                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                        <Setter Property="Background" Value="#2c3e50"/>
+                        <Setter Property="Foreground" Value="#95a5a6"/>
+                        <Setter Property="BorderThickness" Value="0,0,1,2"/>
+                        <Setter Property="BorderBrush" Value="#1a252f"/>
+                        <Setter Property="Padding" Value="20,8,20,10"/>
+                        <Setter Property="FontSize" Value="14"/>
+                        <Setter Property="FontWeight" Value="Normal"/>
+                        <Setter Property="CornerRadius" Value="0,0,8,0"/>
+                </Style>
+                
+                <Style Selector="Button.tab-button:pointerover">
+                        <Setter Property="Background" Value="#34495e"/>
+                        <Setter Property="Foreground" Value="#bdc3c7"/>
+                </Style>
+                
+                <Style Selector="Button.tab-button.active">
+                        <Setter Property="Margin" Value="0"/>
+                        <Setter Property="Background" Value="#7ed796"/>
+                        <Setter Property="Foreground" Value="#2c3e50"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Padding" Value="20,12,20,12"/>
+                </Style>
+        </Window.Styles>
 
-                                <TextBlock Text="Menu" 
-                                        FontSize="24" 
-                                        FontWeight="Bold" 
-                                        Foreground="White" 
-                                        Margin="0,0,0,30"/>
+        <Grid ColumnDefinitions="250,*" RowDefinitions="42, *">
+                <Border Grid.Column="0" Grid.Row="0" Grid.RowSpan="2" 
+                        Background="#2c3e50"
+                        BorderBrush="#3498db" 
+                        BorderThickness="0,0,2,0">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="15,20">
 
-                                <Button x:Name="btnHome" 
-                                        Content="Home" 
-                                        Click="BtnHome_Click"
-                                        Margin="0,5"
-                                        HorizontalAlignment="Stretch"
-                                        Background="#3C3C3C"
-                                        Foreground="White"
-                                        Padding="15"/>
+                                        <TextBlock Text="DB MANAGER" 
+                                                FontSize="18" 
+                                                FontWeight="Bold" 
+                                                Foreground="#ecf0f1" 
+                                                HorizontalAlignment="Center"
+                                                LetterSpacing="2"
+                                                Margin="0,0,0,25"/>
 
-                                <Button x:Name="BtnRedis" 
-                                        Content="🔴 Redis" 
-                                        Click="BtnRedis_Click"
-                                        Margin="0,5" 
-                                        HorizontalAlignment="Stretch"
-                                        Background="#3C3C3C"
-                                        Foreground="White"
-                                        Padding="15"/>
-                                
-                        </StackPanel>
+                                        <Button x:Name="btnDb0" 
+                                                Classes="db-button"
+                                                Content="📁 db_0" 
+                                                Click="BtnDb_Click"
+                                                Tag="0"/>
+
+                                        <Button x:Name="btnDb1" 
+                                                Classes="db-button"
+                                                Content="📁 db_1" 
+                                                Click="BtnDb_Click"
+                                                Tag="1"/>
+
+                                        <Button x:Name="btnDb2" 
+                                                Classes="db-button"
+                                                Content="📁 db_2" 
+                                                Click="BtnDb_Click"
+                                                Tag="2"/>
+                                        
+                                        <Button x:Name="btnDb3" 
+                                                Classes="db-button"
+                                                Content="📁 db_3" 
+                                                Click="BtnDb_Click"
+                                                Tag="3"/>
+                                        
+                                        <Button x:Name="btnDb4" 
+                                                Classes="db-button"
+                                                Content="📁 db_4" 
+                                                Click="BtnDb_Click"
+                                                Tag="4"/>
+
+                                        <Button x:Name="btnDb5" 
+                                                Classes="db-button"
+                                                Content="📁 db_5" 
+                                                Click="BtnDb_Click"
+                                                Tag="5"/>
+                                        
+                                        <Button x:Name="btnDb6" 
+                                                Classes="db-button"
+                                                Content="📁 db_6" 
+                                                Click="BtnDb_Click"
+                                                Tag="6"/>
+                                        
+                                        <Button x:Name="btnDb7" 
+                                                Classes="db-button"
+                                                Content="📁 db_7" 
+                                                Click="BtnDb_Click"
+                                                Tag="7"/>
+
+                                        <Button x:Name="btnDb8" 
+                                                Classes="db-button"
+                                                Content="📁 db_8" 
+                                                Click="BtnDb_Click"
+                                                Tag="8"/>
+                                        
+                                        <Button x:Name="btnDb9" 
+                                                Classes="db-button"
+                                                Content="📁 db_9" 
+                                                Click="BtnDb_Click"
+                                                Tag="9"/>
+
+                                        <Button x:Name="btnDb10" 
+                                                Classes="db-button"
+                                                Content="📁 db_10" 
+                                                Click="BtnDb_Click"
+                                                Tag="10"/>
+                                        
+                                        <Button x:Name="btnDb11" 
+                                                Classes="db-button"
+                                                Content="📁 db_11" 
+                                                Click="BtnDb_Click"
+                                                Tag="11"/>
+                                        
+                                        <Button x:Name="btnDb12" 
+                                                Classes="db-button"
+                                                Content="📁 db_12" 
+                                                Click="BtnDb_Click"
+                                                Tag="12"/>
+
+                                        <Button x:Name="btnDb13" 
+                                                Classes="db-button"
+                                                Content="📁 db_13" 
+                                                Click="BtnDb_Click"
+                                                Tag="13"/>
+                                        
+                                        <Button x:Name="btnDb14" 
+                                                Classes="db-button"
+                                                Content="📁 db_14" 
+                                                Click="BtnDb_Click"
+                                                Tag="14"/>
+
+                                        <Button x:Name="btnDb15" 
+                                                Classes="db-button"
+                                                Content="📁 db_15" 
+                                                Click="BtnDb_Click"
+                                                Tag="15"/>
+                                        
+                                </StackPanel>
+                        </ScrollViewer>
                 </Border>
 
-                <Border Grid.Column="1" Background="pink" Padding="40">
+                <Border Grid.Column="1" Grid.Row="0" Background="#2c3e50" Padding="0">
+                        <Grid ColumnDefinitions="*,*,*">
+                                <Button x:Name="BtnSchema"
+                                        Classes="tab-button"
+                                        Content="Schema"
+                                        Click="BtnSchema_Click"
+                                        Grid.Column="0"/>
+
+                                <Button x:Name="BtnQueries"
+                                        Classes="tab-button"
+                                        Content="Queries"
+                                        Click="BtnQueries_Click"
+                                        Grid.Column="1"/>
+                                
+                                <Button x:Name="BtnData"
+                                        Classes="tab-button"
+                                        Content="Data"
+                                        Click="BtnData_Click"
+                                        Grid.Column="2"/>
+                        </Grid>
+                </Border>
+
+                <Border Grid.Column="1" Grid.Row="1" Background="#7ed796" Padding="0">
                         <ContentControl Content="{Binding CurrentView}" />
                 </Border>
 

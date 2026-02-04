@@ -1,0 +1,115 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:models="using:redisqa.Models"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
+             x:Class="redisqa.Views.TableCard"
+             x:DataType="models:TableModel">
+    
+    <Border Background="#f8f9fa" 
+            BorderBrush="#3d5af1" 
+            BorderThickness="2"
+            CornerRadius="8"
+            Padding="0"
+            MinWidth="200">
+        
+        <StackPanel>
+            <!-- Table Header -->
+            <Border Background="#3d5af1" 
+                    Padding="10"
+                    CornerRadius="6,6,0,0">
+                <TextBox Text="{Binding Name}" 
+                         FontWeight="Bold" 
+                         FontSize="16"
+                         Foreground="White"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         HorizontalAlignment="Center"/>
+            </Border>
+            
+            <!-- Attributes List -->
+            <ItemsControl ItemsSource="{Binding Attributes}" Margin="0">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="models:AttributeModel">
+                        <Border BorderBrush="#e0e0e0" 
+                                BorderThickness="0,0,0,1"
+                                Padding="10,8">
+                            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto">
+                                
+                                <!-- FK Link Button -->
+                                <Button Grid.Column="0"
+                                        Content="🔗"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Padding="0"
+                                        Margin="0,0,8,0"
+                                        FontSize="14"
+                                        ToolTip.Tip="Create Foreign Key Link"
+                                        Tag="{Binding}"
+                                        Click="BtnCreateFKLink_Click"/>
+                                
+                                <!-- Attribute Name -->
+                                <TextBox Grid.Column="1" 
+                                         Text="{Binding Name}"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         Foreground="#2c3e50"
+                                         VerticalAlignment="Center"
+                                         Padding="0"
+                                         Margin="0,0,10,0"/>
+                                
+                                <!-- PK Checkbox -->
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="5,0">
+                                    <TextBlock Text="PK" 
+                                               FontSize="10" 
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,6,0"
+                                               Foreground="#5a6c7d"/>
+                                    <CheckBox IsChecked="{Binding IsPrimaryKey, Mode=TwoWay}" 
+                                              VerticalAlignment="Center"
+                                              Padding="0"/>
+                                </StackPanel>
+                                
+                                <!-- IDX Checkbox -->
+                                <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="5,0">
+                                    <TextBlock Text="IDX" 
+                                               FontSize="10" 
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,6,0"
+                                               Foreground="#5a6c7d"/>
+                                    <CheckBox IsChecked="{Binding IsIndex, Mode=TwoWay}" 
+                                              VerticalAlignment="Center"
+                                              Padding="0"/>
+                                </StackPanel>
+                                
+                                <!-- FK Checkbox -->
+                                <StackPanel Grid.Column="4" Orientation="Horizontal" Margin="5,0">
+                                    <TextBlock Text="FK" 
+                                               FontSize="10" 
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,6,0"
+                                               Foreground="#5a6c7d"/>
+                                    <CheckBox IsChecked="{Binding IsForeignKey, Mode=TwoWay}" 
+                                              VerticalAlignment="Center"
+                                              Padding="0"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            
+            <!-- Add Attribute Button -->
+            <Button Content="+ Add Attribute"
+                    x:Name="BtnAddAttribute"
+                    HorizontalAlignment="Stretch"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Foreground="#3d5af1"
+                    FontSize="12"
+                    Padding="10,8"/>
+        </StackPanel>
+    </Border>
+    
+</UserControl>

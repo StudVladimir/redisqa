@@ -7,7 +7,6 @@ public partial class HomeView : UserControl
 {
     public HomeView()
     {
-        Console.WriteLine("HomeView initialized");
         InitializeComponent();
     }
 }

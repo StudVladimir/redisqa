@@ -13,6 +13,17 @@ public class MainWindowViewModel: BaseViewModel
         }
     }
 
+    private int? _selectedDb;
+    public int? SelectedDb
+    {
+        get => _selectedDb;
+        set
+        {
+            _selectedDb = value;
+            OnPropertyChanged();
+        }
+    }
+
     public MainWindowViewModel()
     {
         // При запуске показываем HomeView
@@ -24,8 +35,8 @@ public class MainWindowViewModel: BaseViewModel
         CurrentView = new Views.HomeView();
     }
 
-    public void NavigateToSecond()
+    public void NavigateToSchema()
     {
-        CurrentView = new Views.SecondView();
+        CurrentView = new Views.SchemaView();
     }
 }
