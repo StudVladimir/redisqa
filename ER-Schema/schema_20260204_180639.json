@@ -1,0 +1,50 @@
+{
+  "tables": [
+    {
+      "name": "Table_1",
+      "attributes": [
+        {
+          "name": "id",
+          "pk": true,
+          "idx": true,
+          "fk": false
+        },
+        {
+          "name": "attribute_2",
+          "pk": false,
+          "idx": false,
+          "fk": false
+        },
+        {
+          "name": "attribute_3",
+          "pk": false,
+          "idx": true,
+          "fk": false
+        }
+      ]
+    },
+    {
+      "name": "Table_2",
+      "attributes": [
+        {
+          "name": "id",
+          "pk": true,
+          "idx": true,
+          "fk": false
+        },
+        {
+          "name": "Table_1_id",
+          "pk": false,
+          "idx": true,
+          "fk": [
+            {
+              "condition": "references",
+              "reference_table": "Table_1",
+              "reference_attribute": "id"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -54,7 +54,15 @@
                             FontWeight="SemiBold"
                             CornerRadius="5"/>
                     
-                    <Button Content="🗑️ Clear"
+                    <Button Content="� Save"
+                            x:Name="BtnSave"
+                            Background="#28B57D"
+                            Foreground="White"
+                            Padding="15,8"
+                            FontWeight="SemiBold"
+                            CornerRadius="5"/>
+                    
+                    <Button Content="�🗑️ Clear"
                             x:Name="BtnClear"
                             Background="#e74c3c"
                             Foreground="White"

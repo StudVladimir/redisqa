@@ -1,4 +1,10 @@
+using System;
 using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using redisqa.Models;
 
 namespace redisqa.ViewModels;
@@ -12,6 +18,17 @@ public class SchemaViewModel : BaseViewModel
         set
         {
             _tables = value;
+            OnPropertyChanged();
+        }
+    }
+    
+    private ObservableCollection<FKLinkModel> _fkLinks = new();
+    public ObservableCollection<FKLinkModel> FKLinks
+    {
+        get => _fkLinks;
+        set
+        {
+            _fkLinks = value;
             OnPropertyChanged();
         }
     }
@@ -68,6 +85,60 @@ public class SchemaViewModel : BaseViewModel
         { 
             Name = $"attribute_{table.Attributes.Count + 1}" 
         });
+    }
+    
+    public async Task SaveSchemaAsync()
+    {
+        var schemaDir = Path.Combine(Directory.GetCurrentDirectory(), "ER-schema");
+        Directory.CreateDirectory(schemaDir);
+        
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var fileName = $"schema_{timestamp}.json";
+        var filePath = Path.Combine(schemaDir, fileName);
+        
+        var schemaJson = new
+        {
+            tables = Tables.Select(t => new
+            {
+                name = t.Name,
+                attributes = t.Attributes.Select(a =>
+                {
+                    object fkValue;
+                    if (a.IsForeignKey && a.ForeignKeyReferences != null && a.ForeignKeyReferences.Count > 0)
+                    {
+                        fkValue = a.ForeignKeyReferences.Select(fk => new
+                        {
+                            condition = fk.Condition,
+                            reference_table = fk.ReferenceTable,
+                            reference_attribute = fk.ReferenceAttribute
+                        }).ToList();
+                    }
+                    else
+                    {
+                        fkValue = false;
+                    }
+                    
+                    return new
+                    {
+                        name = a.Name,
+                        PK = a.IsPrimaryKey,
+                        IDX = a.IsIndex,
+                        FK = fkValue
+                    };
+                }).ToList()
+            }).ToList()
+        };
+        
+        var options = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+        
+        var json = JsonSerializer.Serialize(schemaJson, options);
+        await File.WriteAllTextAsync(filePath, json);
+        
+        System.Diagnostics.Debug.WriteLine($"Schema saved to: {filePath}");
     }
 
     public void RemoveAttribute(TableModel table, AttributeModel attribute)

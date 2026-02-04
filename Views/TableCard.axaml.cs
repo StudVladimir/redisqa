@@ -14,6 +14,12 @@ public partial class TableCard : UserControl
     
     // Event for FK link creation
     public event EventHandler<FKLinkEventArgs>? FKLinkRequested;
+    
+    // Event for table deletion
+    public event EventHandler<TableModel>? TableDeleteRequested;
+    
+    // Event for attribute deletion
+    public event EventHandler<AttributeDeleteEventArgs>? AttributeDeleteRequested;
 
     public TableCard()
     {
@@ -80,6 +86,27 @@ public partial class TableCard : UserControl
             FKLinkRequested?.Invoke(this, new FKLinkEventArgs(table, attribute));
         }
     }
+    
+    private void BtnDeleteAttribute_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.Tag is AttributeModel attribute && DataContext is TableModel table)
+        {
+            // Raise event to notify SchemaView about attribute deletion
+            AttributeDeleteRequested?.Invoke(this, new AttributeDeleteEventArgs(table, attribute));
+            
+            // Remove attribute from table
+            table.Attributes.Remove(attribute);
+        }
+    }
+    
+    private void BtnDeleteTable_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is TableModel table)
+        {
+            // Raise event to request table deletion
+            TableDeleteRequested?.Invoke(this, table);
+        }
+    }
 
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -119,5 +146,18 @@ public class FKLinkEventArgs : EventArgs
     {
         SourceTable = sourceTable;
         SourceAttribute = sourceAttribute;
+    }
+}
+
+// Event args for attribute deletion
+public class AttributeDeleteEventArgs : EventArgs
+{
+    public TableModel Table { get; }
+    public AttributeModel Attribute { get; }
+    
+    public AttributeDeleteEventArgs(TableModel table, AttributeModel attribute)
+    {
+        Table = table;
+        Attribute = attribute;
     }
 }
