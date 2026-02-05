@@ -1,0 +1,145 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:redisqa.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="700"
+        x:Class="redisqa.ConnectionWindow"
+        x:DataType="vm:ConnectionWindowViewModel"
+        Title="Connect to Redis"
+        Width="1200"
+        Height="700"
+        WindowStartupLocation="CenterScreen"
+        CanResize="False">
+    
+    <Window.Styles>
+        <Style Selector="TextBlock.label">
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#ecf0f1"/>
+            <Setter Property="Margin" Value="0,0,0,5"/>
+        </Style>
+        
+        <Style Selector="TextBox">
+            <Setter Property="Padding" Value="10"/>
+            <Setter Property="Background" Value="#34495e"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#3d5af1"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="5"/>
+        </Style>
+        
+        <Style Selector="TextBox:focus">
+            <Setter Property="BorderBrush" Value="#28B57D"/>
+        </Style>
+        
+        <Style Selector="Border.status-success">
+            <Setter Property="Background" Value="#28B57D"/>
+        </Style>
+        
+        <Style Selector="Border.status-error">
+            <Setter Property="Background" Value="#e74c3c"/>
+        </Style>
+        
+        <Style Selector="Border.status-info">
+            <Setter Property="Background" Value="#2c3e50"/>
+        </Style>
+    </Window.Styles>
+    
+    <Border Background="#1a1a2e" Padding="40">
+        <StackPanel Spacing="20" VerticalAlignment="Center">
+            
+            <!-- Logo/Title -->
+            <StackPanel Spacing="10" HorizontalAlignment="Center">
+                <TextBlock Text="Redis QA" 
+                           FontSize="32" 
+                           FontWeight="Bold"
+                           Foreground="#3d5af1"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="Connect to your Redis instance" 
+                           FontSize="14" 
+                           Foreground="#95a5a6"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
+            
+            <!-- Connection Form -->
+            <Border Background="#16213e" 
+                    CornerRadius="10" 
+                    Padding="30"
+                    BorderBrush="#3d5af1"
+                    BorderThickness="1">
+                <StackPanel Spacing="15">
+                    
+                    <!-- Instance Name -->
+                    <StackPanel>
+                        <TextBlock Text="Instance Name" Classes="label"/>
+                        <TextBox Text="{Binding InstanceName}" 
+                                 Watermark="e.g., Local Redis"
+                                 IsEnabled="{Binding CanConnect}"/>
+                    </StackPanel>
+                    
+                    <!-- Host -->
+                    <StackPanel>
+                        <TextBlock Text="Host" Classes="label"/>
+                        <TextBox Text="{Binding Host}" 
+                                 Watermark="e.g., localhost or 127.0.0.1"
+                                 IsEnabled="{Binding CanConnect}"/>
+                    </StackPanel>
+                    
+                    <!-- Port -->
+                    <StackPanel>
+                        <TextBlock Text="Port" Classes="label"/>
+                        <TextBox Text="{Binding Port}" 
+                                 Watermark="Default: 6379"
+                                 IsEnabled="{Binding CanConnect}"/>
+                    </StackPanel>
+                    
+                    <!-- Password -->
+                    <StackPanel>
+                        <TextBlock Text="Password (optional)" Classes="label"/>
+                        <TextBox Text="{Binding Password}" 
+                                 Watermark="Leave empty if no password"
+                                 PasswordChar="●"
+                                 IsEnabled="{Binding CanConnect}"/>
+                    </StackPanel>
+                    
+                </StackPanel>
+            </Border>
+            
+            <!-- Status Message -->
+            <Border x:Name="StatusBorder"
+                    Background="#2c3e50"
+                    CornerRadius="5" 
+                    Padding="15"
+                    IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding StatusMessage}" 
+                           Foreground="White"
+                           FontWeight="SemiBold"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </Border>
+            
+            <!-- Connect Button -->
+            <Button x:Name="BtnConnect"
+                    Content="Connect to Redis"
+                    Background="#3d5af1"
+                    Foreground="White"
+                    Padding="0,15"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    CornerRadius="5"
+                    HorizontalAlignment="Stretch"
+                    IsEnabled="{Binding CanConnect}">
+                <Button.Styles>
+                    <Style Selector="Button:pointerover">
+                        <Setter Property="Background" Value="#2844d1"/>
+                    </Style>
+                    <Style Selector="Button:disabled">
+                        <Setter Property="Opacity" Value="0.5"/>
+                    </Style>
+                </Button.Styles>
+            </Button>
+            
+        </StackPanel>
+    </Border>
+    
+</Window>
