@@ -37,6 +37,6 @@ public class MainWindowViewModel: BaseViewModel
 
     public void NavigateToSchema()
     {
-        CurrentView = new Views.SchemaView();
+        CurrentView = new Views.SchemaView.SchemaView();
     }
 }

@@ -5,7 +5,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using redisqa.Models;
 
-namespace redisqa.Views;
+namespace redisqa.Views.SchemaView;
 
 public partial class TableCard : UserControl
 {

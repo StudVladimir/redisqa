@@ -4,7 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:models="using:redisqa.Models"
              mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
-             x:Class="redisqa.Views.TableCard"
+             x:Class="redisqa.Views.SchemaView.TableCard"
              x:DataType="models:TableModel">
     
     <Border Background="#f8f9fa" 
