@@ -1,0 +1,79 @@
+{
+  "tables": [
+    {
+      "name": "User",
+      "attributes": [
+        {
+          "name": "user_id",
+          "pk": true,
+          "idx": true,
+          "fk": false
+        },
+        {
+          "name": "name",
+          "pk": false,
+          "idx": false,
+          "fk": false
+        },
+        {
+          "name": "city",
+          "pk": false,
+          "idx": true,
+          "fk": false
+        }
+      ]
+    },
+    {
+      "name": "Order",
+      "attributes": [
+        {
+          "name": "id",
+          "pk": true,
+          "idx": true,
+          "fk": false
+        },
+        {
+          "name": "Good_id",
+          "pk": false,
+          "idx": true,
+          "fk": [
+            {
+              "condition": "references",
+              "reference_table": "Good",
+              "reference_attribute": "id"
+            }
+          ]
+        },
+        {
+          "name": "User_user_id",
+          "pk": false,
+          "idx": true,
+          "fk": [
+            {
+              "condition": "references",
+              "reference_table": "User",
+              "reference_attribute": "user_id"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Good",
+      "attributes": [
+        {
+          "name": "id",
+          "pk": true,
+          "idx": true,
+          "fk": false
+        },
+        {
+          "name": "name",
+          "pk": false,
+          "idx": false,
+          "fk": false
+        }
+      ]
+    }
+  ]
+}

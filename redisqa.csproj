@@ -17,5 +17,6 @@
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="StackExchange.Redis" Version="2.10.14" />
   </ItemGroup>
 </Project>
