@@ -37,10 +37,9 @@ public partial class ConnectionWindow : Window
     {
         if (e.PropertyName == nameof(ConnectionWindowViewModel.HasError) && _statusBorder != null)
         {
-            // Изменить цвет фона в зависимости от ошибки
             _statusBorder.Background = _viewModel.HasError 
-                ? new SolidColorBrush(Color.Parse("#e74c3c"))  // Красный для ошибки
-                : new SolidColorBrush(Color.Parse("#28B57D")); // Зеленый для успеха
+                ? new SolidColorBrush(Color.Parse("#e74c3c"))
+                : new SolidColorBrush(Color.Parse("#28B57D"));
         }
     }
     

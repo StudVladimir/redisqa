@@ -1,7 +1,12 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media;
 using redisqa.ViewModels;
 using redisqa.Views;
+using redisqa.Services;
+using System;
+using System.ComponentModel;
 
 namespace redisqa;
 
@@ -10,12 +15,22 @@ public partial class MainWindow : Window
     private MainWindowViewModel _viewModel = new MainWindowViewModel();
     private Button? _selectedDbButton;
     private Button? _selectedTabButton;
+    private TextBlock? _connectionStatusText;
 
     public MainWindow()
     {
         InitializeComponent();
 
         DataContext = _viewModel;
+        
+        // Получить ссылку на текстовый блок статуса
+        _connectionStatusText = this.FindControl<TextBlock>("ConnectionStatusText");
+        
+        // Подписаться на изменения свойства IsConnected
+        _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        
+        // Установить начальный цвет
+        UpdateConnectionStatusColor();
         
         // Выбираем db_0 по умолчанию
         var btnDb0 = this.FindControl<Button>("btnDb0");
@@ -29,6 +44,44 @@ public partial class MainWindow : Window
         if (btnSchema != null)
         {
             HighlightTab(btnSchema);
+        }
+    }
+    
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainWindowViewModel.IsConnected))
+        {
+            UpdateConnectionStatusColor();
+        }
+    }
+    
+    private void UpdateConnectionStatusColor()
+    {
+        if (_connectionStatusText != null)
+        {
+            _connectionStatusText.Foreground = _viewModel.IsConnected 
+                ? new SolidColorBrush(Color.Parse("#28B57D"))  // Зеленый
+                : new SolidColorBrush(Color.Parse("#e74c3c"));  // Красный
+        }
+    }
+    
+    private async void BtnRefresh_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        await _viewModel.CheckConnectionAsync();
+    }
+    
+    private async void BtnDisconnect_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        // Отключиться от Redis
+        await RedisConnectionService.Instance.DisconnectAsync();
+        
+        // Закрыть MainWindow и открыть ConnectionWindow
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            var connectionWindow = new ConnectionWindow();
+            desktop.MainWindow = connectionWindow;
+            connectionWindow.Show();
+            this.Close();
         }
     }
 

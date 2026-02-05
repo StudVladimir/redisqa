@@ -64,7 +64,62 @@
                                                 Foreground="#ecf0f1" 
                                                 HorizontalAlignment="Center"
                                                 LetterSpacing="2"
-                                                Margin="0,0,0,25"/>
+                                                Margin="0,0,0,15"/>
+                                        
+                                        <!-- Connection Status -->
+                                        <Border Background="#34495e" 
+                                                CornerRadius="8" 
+                                                Padding="12"
+                                                Margin="0,0,0,15">
+                                                <Grid RowDefinitions="Auto,Auto">
+                                                        <!-- Status Line -->
+                                                        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="5">
+                                                                <TextBlock x:Name="ConnectionStatusText"
+                                                                           Text="{Binding ConnectionStatus}" 
+                                                                           FontSize="13" 
+                                                                           FontWeight="Bold"
+                                                                           VerticalAlignment="Center"/>
+                                                                <TextBlock Text="{Binding InstanceName}" 
+                                                                           FontSize="12" 
+                                                                           Foreground="#bdc3c7"
+                                                                           VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                        
+                                                        <!-- Host Address and Buttons -->
+                                                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,8,0,0">
+                                                                <TextBlock Grid.Column="0"
+                                                                           Text="{Binding HostAddress}" 
+                                                                           FontSize="11" 
+                                                                           Foreground="#95a5a6"
+                                                                           VerticalAlignment="Center"/>
+                                                                
+                                                                <Button Grid.Column="1"
+                                                                        x:Name="BtnRefresh"
+                                                                        Background="Transparent"
+                                                                        BorderThickness="0"
+                                                                        Padding="6"
+                                                                        Margin="5,0"
+                                                                        ToolTip.Tip="Check Connection"
+                                                                        Click="BtnRefresh_Click">
+                                                                        <Image Source="/Assets/refresh.png" 
+                                                                               Width="18" 
+                                                                               Height="18"/>
+                                                                </Button>
+                                                                
+                                                                <Button Grid.Column="2"
+                                                                        x:Name="BtnDisconnect"
+                                                                        Background="Transparent"
+                                                                        BorderThickness="0"
+                                                                        Padding="6"
+                                                                        ToolTip.Tip="Disconnect"
+                                                                        Click="BtnDisconnect_Click">
+                                                                        <Image Source="/Assets/disruption.png" 
+                                                                               Width="18" 
+                                                                               Height="18"/>
+                                                                </Button>
+                                                        </Grid>
+                                                </Grid>
+                                        </Border>
 
                                         <Button x:Name="btnDb0" 
                                                 Classes="db-button"
