@@ -1,0 +1,50 @@
+{
+  "tables": [
+    {
+      "name": "User",
+      "attributes": [
+        {
+          "name": "User_id",
+          "pk": true,
+          "idx": true,
+          "fk": false
+        },
+        {
+          "name": "Name",
+          "pk": false,
+          "idx": false,
+          "fk": false
+        },
+        {
+          "name": "City",
+          "pk": false,
+          "idx": true,
+          "fk": false
+        }
+      ]
+    },
+    {
+      "name": "Order",
+      "attributes": [
+        {
+          "name": "id",
+          "pk": true,
+          "idx": true,
+          "fk": false
+        },
+        {
+          "name": "User_Name",
+          "pk": false,
+          "idx": true,
+          "fk": [
+            {
+              "condition": "references",
+              "reference_table": "User",
+              "reference_attribute": "Name"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

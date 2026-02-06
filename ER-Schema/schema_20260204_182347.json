@@ -1,7 +1,5 @@
 {
-  "tables": [
-    {
-      "name": "User",
+  "tables": [{"name": "User",
       "attributes": [
         {
           "name": "user_id",

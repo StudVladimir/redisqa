@@ -10,7 +10,7 @@ using Avalonia.Media;
 using redisqa.Models;
 using redisqa.ViewModels;
 
-namespace redisqa.Views.SchemaView;
+namespace redisqa.Views;
 
 public partial class SchemaView : UserControl
 {

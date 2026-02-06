@@ -154,6 +154,12 @@ public class MainWindowViewModel: BaseViewModel
 
     public void NavigateToSchema()
     {
-        CurrentView = new Views.SchemaView.SchemaView();
+        var schemaView = new Views.SchemaView.SchemaView();
+        // Передаем выбранную БД в SchemaViewModel
+        if (schemaView.DataContext is SchemaViewModel schemaViewModel && SelectedDb.HasValue)
+        {
+            schemaViewModel.SelectedDb = SelectedDb.Value;
+        }
+        CurrentView = schemaView;
     }
 }
