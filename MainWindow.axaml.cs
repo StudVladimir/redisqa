@@ -110,7 +110,7 @@ public partial class MainWindow : Window
 
     private void BtnData_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        // TODO: Implement data navigation
+        _viewModel.NavigateToData();
         if (sender is Button button)
         {
             HighlightTab(button);

@@ -421,20 +421,8 @@ public partial class SchemaView : UserControl
     {
         try
         {
-            // Получаем выбранную базу данных из контекста приложения
-            // Пытаемся найти MainWindow и получить выбранную БД
-            int selectedDb = 0; // По умолчанию db0
-            
-            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                if (desktop.MainWindow?.DataContext is MainWindowViewModel mainViewModel)
-                {
-                    selectedDb = mainViewModel.SelectedDb ?? 0;
-                }
-            }
-            
-            // Используем готовый сервис для получения схемы из Redis
-            var schemaJson = await GetSchemaFromRedis.Instance.GetSchemaAsync(selectedDb);
+            // Используем сервис для получения схемы с автоматическим определением selectedDb
+            var schemaJson = await GetSchemaFromRedis.Instance.GetSchemaForCurrentContextAsync();
             
             if (!string.IsNullOrEmpty(schemaJson))
             {

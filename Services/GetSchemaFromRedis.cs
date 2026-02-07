@@ -1,5 +1,8 @@
 using System;
 using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
+using redisqa.ViewModels;
 
 namespace redisqa.Services;
 
@@ -75,6 +78,35 @@ public class GetSchemaFromRedis
         {
             System.Diagnostics.Debug.WriteLine($"Error loading schema from Redis: {ex.Message}");
             _cachedSchemaJson = null;
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// Gets the schema from Redis using the currently selected database from application context
+    /// </summary>
+    /// <returns>JSON string with the schema or null if the schema is not found</returns>
+    public async Task<string?> GetSchemaForCurrentContextAsync()
+    {
+        try
+        {
+            // Получаем выбранную базу данных из контекста приложения
+            int selectedDb = 0; // По умолчанию db0
+            
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                if (desktop.MainWindow?.DataContext is MainWindowViewModel mainViewModel)
+                {
+                    selectedDb = mainViewModel.SelectedDb ?? 0;
+                }
+            }
+            
+            // Используем основной метод для получения схемы
+            return await GetSchemaAsync(selectedDb);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error loading schema for current context: {ex.Message}");
             return null;
         }
     }

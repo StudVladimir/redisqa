@@ -1,0 +1,222 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:redisqa.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="redisqa.Views.DataView.DataView"
+             x:DataType="vm:DataViewModel">
+    
+    <Design.DataContext>
+        <vm:DataViewModel/>
+    </Design.DataContext>
+    
+    <Grid RowDefinitions="Auto,*">
+        <!-- Верхняя панель с выпадающим списком таблиц -->
+        <Border Grid.Row="0" 
+                Background="#34495e" 
+                Padding="20"
+                BorderBrush="#2c3e50"
+                BorderThickness="0,0,0,2">
+            <StackPanel Spacing="10">
+                <TextBlock Text="Data Management" 
+                          FontSize="20" 
+                          FontWeight="Bold"
+                          Foreground="#ecf0f1"/>
+                
+                <!-- Информация о подключении -->
+                <StackPanel Orientation="Horizontal" Spacing="15">
+                    <TextBlock Text="{Binding SelectedDb, StringFormat='DB: {0}'}"
+                              FontSize="12"
+                              Foreground="#95a5a6"/>
+                    
+                    <TextBlock Text="{Binding HasSchema, StringFormat='Schema: {0}'}"
+                              FontSize="12"
+                              Foreground="#95a5a6"/>
+                    
+                    <TextBlock Text="{Binding TableNames.Count, StringFormat='Tables: {0}'}"
+                              FontSize="12"
+                              Foreground="#95a5a6"/>
+                </StackPanel>
+                
+                <!-- Выпадающий список таблиц -->
+                <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
+                    <TextBlock Text="Select Table:" 
+                              VerticalAlignment="Center"
+                              FontSize="14"
+                              Foreground="#ecf0f1"
+                              Width="100"/>
+                    
+                    <ComboBox x:Name="TableSelector"
+                             ItemsSource="{Binding TableNames}"
+                             SelectedItem="{Binding SelectedTable}"
+                             Width="250"
+                             Background="#2c3e50"
+                             Foreground="#ecf0f1"
+                             BorderBrush="#3498db"
+                             BorderThickness="1"
+                             IsEnabled="{Binding HasSchema}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" 
+                                          Padding="5"
+                                          Foreground="#ecf0f1"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+        
+        <!-- Основная область для работы с данными -->
+        <Grid Grid.Row="1" Background="#2c3e50">
+            <!-- Временный контент -->
+            <StackPanel VerticalAlignment="Center" 
+                       HorizontalAlignment="Center"
+                       Spacing="10"
+                       IsVisible="{Binding !HasSchema}">
+                <TextBlock Text="⚠" 
+                          FontSize="48"
+                          HorizontalAlignment="Center"
+                          Foreground="#e74c3c"/>
+                <TextBlock Text="No schema found" 
+                          FontSize="18"
+                          HorizontalAlignment="Center"
+                          Foreground="#95a5a6"/>
+                <TextBlock Text="Please create a schema first in Schema View" 
+                          FontSize="14"
+                          HorizontalAlignment="Center"
+                          Foreground="#7f8c8d"/>
+            </StackPanel>
+            
+            <!-- Контент когда есть схема и выбрана таблица -->
+            <Grid IsVisible="{Binding HasSchema}" Margin="20">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                
+                <!-- Заголовок таблицы -->
+                <Border Grid.Row="0" 
+                       Background="#34495e"
+                       CornerRadius="5"
+                       Padding="15"
+                       Margin="0,0,0,20">
+                    <TextBlock Text="{Binding SelectedTable, StringFormat='Working with table: {0}'}"
+                              FontSize="18"
+                              FontWeight="SemiBold"
+                              Foreground="#ecf0f1"/>
+                </Border>
+                
+                <!-- Drag and Drop область -->
+                <Border Grid.Row="1"
+                       x:Name="DropZone"
+                       Background="#34495e"
+                       BorderBrush="#3498db"
+                       BorderThickness="2"
+                       CornerRadius="10"
+                       Padding="40"
+                       DragDrop.AllowDrop="True">
+                    
+                    <StackPanel VerticalAlignment="Center" 
+                               HorizontalAlignment="Center"
+                               Spacing="20">
+                        
+                        <!-- Иконка загрузки -->
+                        <TextBlock Text="📁" 
+                                  FontSize="64"
+                                  HorizontalAlignment="Center"
+                                  Foreground="#3498db"/>
+                        
+                        <!-- Основной текст -->
+                        <TextBlock Text="Drag and drop CSV file here"
+                                  FontSize="20"
+                                  FontWeight="SemiBold"
+                                  HorizontalAlignment="Center"
+                                  Foreground="#ecf0f1"/>
+                        
+                        <TextBlock Text="or"
+                                  FontSize="14"
+                                  HorizontalAlignment="Center"
+                                  Foreground="#95a5a6"/>
+                        
+                        <!-- Кнопка выбора файла -->
+                        <Button x:Name="BtnSelectFile"
+                               Content="Select CSV File"
+                               Click="BtnSelectFile_Click"
+                               Padding="20,10"
+                               Background="#3498db"
+                               Foreground="White"
+                               BorderThickness="0"
+                               CornerRadius="5"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               Cursor="Hand">
+                            <Button.Styles>
+                                <Style Selector="Button:pointerover">
+                                    <Setter Property="Background" Value="#2980b9"/>
+                                </Style>
+                            </Button.Styles>
+                        </Button>
+                        
+                        <!-- Информация о загруженном файле -->
+                        <Border IsVisible="{Binding HasLoadedFile}"
+                               Background="#27ae60"
+                               CornerRadius="5"
+                               Padding="15,10"
+                               Margin="0,20,0,0">
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="✓ File loaded successfully"
+                                          FontSize="14"
+                                          FontWeight="SemiBold"
+                                          HorizontalAlignment="Center"
+                                          Foreground="White"/>
+                                <TextBlock Text="{Binding LoadedFileName}"
+                                          FontSize="12"
+                                          HorizontalAlignment="Center"
+                                          Foreground="White"/>
+                                <TextBlock Text="{Binding CsvData.Count, StringFormat='Rows: {0}'}"
+                                          FontSize="12"
+                                          HorizontalAlignment="Center"
+                                          Foreground="White"/>
+                            </StackPanel>
+                        </Border>
+                        
+                        <!-- Кнопка Insert Data -->
+                        <Button x:Name="BtnInsertData"
+                               Content="Insert Data to Redis"
+                               Click="BtnInsertData_Click"
+                               Padding="25,12"
+                               Background="#27ae60"
+                               Foreground="White"
+                               BorderThickness="0"
+                               CornerRadius="5"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Cursor="Hand"
+                               IsEnabled="{Binding HasLoadedFile}"
+                               IsVisible="{Binding HasLoadedFile}"
+                               Margin="0,20,0,0">
+                            <Button.Styles>
+                                <Style Selector="Button:pointerover">
+                                    <Setter Property="Background" Value="#229954"/>
+                                </Style>
+                                <Style Selector="Button:disabled">
+                                    <Setter Property="Background" Value="#95a5a6"/>
+                                    <Setter Property="Opacity" Value="0.5"/>
+                                </Style>
+                            </Button.Styles>
+                        </Button>
+                        
+                        <!-- Подсказка -->
+                        <TextBlock Text="Supported format: .csv files only"
+                                  FontSize="12"
+                                  HorizontalAlignment="Center"
+                                  Foreground="#7f8c8d"
+                                  Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

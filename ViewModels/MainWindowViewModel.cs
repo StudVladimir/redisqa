@@ -162,4 +162,15 @@ public class MainWindowViewModel: BaseViewModel
         }
         CurrentView = schemaView;
     }
+    
+    public void NavigateToData()
+    {
+        var dataView = new Views.DataView.DataView();
+        // Передаем выбранную БД в DataViewModel
+        if (dataView.DataContext is DataViewModel dataViewModel && SelectedDb.HasValue)
+        {
+            dataViewModel.SelectedDb = SelectedDb.Value;
+        }
+        CurrentView = dataView;
+    }
 }
