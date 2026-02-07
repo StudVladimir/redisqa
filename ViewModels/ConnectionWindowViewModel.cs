@@ -6,10 +6,10 @@ namespace redisqa.ViewModels;
 
 public class ConnectionWindowViewModel : BaseViewModel
 {
-    private string _instanceName = "Local Redis";
-    private string _host = "localhost";
-    private int _port = 6379;
-    private string _password = "";
+    private string _instanceName = Environment.GetEnvironmentVariable("REDIS_INSTANCE_NAME") ?? "Local Redis";
+    private string _host = Environment.GetEnvironmentVariable("REDIS_HOST") ?? "localhost";
+    private int _port = int.TryParse(Environment.GetEnvironmentVariable("REDIS_PORT"), out var p) ? p : 6379;
+    private string _password = Environment.GetEnvironmentVariable("REDIS_PASSWORD") ?? "";
     private string _statusMessage = "";
     private bool _isConnecting = false;
     private bool _hasError = false;

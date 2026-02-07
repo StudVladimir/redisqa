@@ -1,14 +1,19 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using redisqa.Models;
 using redisqa.ViewModels;
+using redisqa.Services;
 
 namespace redisqa.Views.SchemaView;
 
@@ -69,6 +74,9 @@ public partial class SchemaView : UserControl
         {
             btnClear.Click += BtnClear_Click;
         }
+        
+        // fire and forget 
+        _ = LoadSchemaFromRedisAsync();
     }
 
     private void Tables_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -407,5 +415,183 @@ public partial class SchemaView : UserControl
         }
         
         return null;
+    }
+    
+    private async Task LoadSchemaFromRedisAsync()
+    {
+        try
+        {
+            // Получаем выбранную базу данных из контекста приложения
+            // Пытаемся найти MainWindow и получить выбранную БД
+            int selectedDb = 0; // По умолчанию db0
+            
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                if (desktop.MainWindow?.DataContext is MainWindowViewModel mainViewModel)
+                {
+                    selectedDb = mainViewModel.SelectedDb ?? 0;
+                }
+            }
+            
+            // Используем готовый сервис для получения схемы из Redis
+            var schemaJson = await GetSchemaFromRedis.Instance.GetSchemaAsync(selectedDb);
+            
+            if (!string.IsNullOrEmpty(schemaJson))
+            {
+                // Если схема найдена, строим её
+                await BuildSchemaFromERDmodel(schemaJson);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error loading schema from Redis: {ex.Message}");
+            // Если ошибка, оставляем пустую схему для создания новой
+        }
+    }
+    
+    private async Task BuildSchemaFromERDmodel(string jsonString)
+    {
+        try
+        {
+            // Парсим JSON
+            var jsonDoc = JsonDocument.Parse(jsonString);
+            var root = jsonDoc.RootElement;
+            
+            if (!root.TryGetProperty("tables", out var tablesArray))
+            {
+                System.Diagnostics.Debug.WriteLine("No 'tables' property found in schema JSON");
+                return;
+            }
+            
+            var tables = new Dictionary<string, TableModel>();
+            int tableIndex = 0;
+            
+            // Первый проход: создаём все таблицы и их атрибуты
+            foreach (var tableJson in tablesArray.EnumerateArray())
+            {
+                if (!tableJson.TryGetProperty("name", out var nameProperty))
+                    continue;
+                
+                var tableName = nameProperty.GetString();
+                if (string.IsNullOrEmpty(tableName))
+                    continue;
+                
+                var tableModel = new TableModel
+                {
+                    Name = tableName,
+                    X = 150 + (tableIndex % 3) * 300, // Размещаем таблицы в сетке 3x3
+                    Y = 150 + (tableIndex / 3) * 250
+                };
+                
+                // Добавляем атрибуты
+                if (tableJson.TryGetProperty("attributes", out var attributesArray))
+                {
+                    foreach (var attrJson in attributesArray.EnumerateArray())
+                    {
+                        if (!attrJson.TryGetProperty("name", out var attrNameProperty))
+                            continue;
+                        
+                        var attrName = attrNameProperty.GetString();
+                        if (string.IsNullOrEmpty(attrName))
+                            continue;
+                        
+                        var attribute = new AttributeModel
+                        {
+                            Name = attrName,
+                            IsPrimaryKey = attrJson.TryGetProperty("pk", out var pkProp) && pkProp.GetBoolean(),
+                            IsIndex = attrJson.TryGetProperty("idx", out var idxProp) && idxProp.GetBoolean()
+                        };
+                        
+                        // Обрабатываем FK
+                        if (attrJson.TryGetProperty("fk", out var fkProp))
+                        {
+                            if (fkProp.ValueKind == JsonValueKind.Array)
+                            {
+                                attribute.IsForeignKey = true;
+                                attribute.ForeignKeyReferences = new List<ForeignKeyReference>();
+                                
+                                foreach (var fkRefJson in fkProp.EnumerateArray())
+                                {
+                                    var fkRef = new ForeignKeyReference
+                                    {
+                                        Condition = fkRefJson.TryGetProperty("condition", out var condProp) 
+                                            ? condProp.GetString() ?? "references" 
+                                            : "references",
+                                        ReferenceTable = fkRefJson.TryGetProperty("reference_table", out var refTableProp) 
+                                            ? refTableProp.GetString() ?? "" 
+                                            : "",
+                                        ReferenceAttribute = fkRefJson.TryGetProperty("reference_attribute", out var refAttrProp) 
+                                            ? refAttrProp.GetString() ?? "" 
+                                            : ""
+                                    };
+                                    
+                                    attribute.ForeignKeyReferences.Add(fkRef);
+                                }
+                            }
+                        }
+                        
+                        tableModel.Attributes.Add(attribute);
+                    }
+                }
+                
+                tables[tableName] = tableModel;
+                tableIndex++;
+            }
+            
+            // Инициализируем ViewModel если ещё не создан
+            if (_viewModel == null)
+            {
+                _viewModel = new SchemaViewModel();
+            }
+            
+            // Очищаем существующие таблицы
+            _viewModel.Tables.Clear();
+            _viewModel.FKLinks.Clear();
+            
+            // Добавляем все таблицы в ViewModel
+            foreach (var table in tables.Values)
+            {
+                _viewModel.Tables.Add(table);
+            }
+            
+            // Второй проход: создаём FK связи
+            foreach (var table in tables.Values)
+            {
+                foreach (var attr in table.Attributes)
+                {
+                    if (attr.IsForeignKey && attr.ForeignKeyReferences != null)
+                    {
+                        foreach (var fkRef in attr.ForeignKeyReferences)
+                        {
+                            if (tables.TryGetValue(fkRef.ReferenceTable, out var sourceTable))
+                            {
+                                var sourceAttr = sourceTable.Attributes
+                                    .FirstOrDefault(a => a.Name == fkRef.ReferenceAttribute);
+                                
+                                if (sourceAttr != null)
+                                {
+                                    var fkLink = new FKLinkModel
+                                    {
+                                        SourceTable = sourceTable,
+                                        SourceAttribute = sourceAttr,
+                                        TargetTable = table,
+                                        TargetAttribute = attr
+                                    };
+                                    
+                                    _viewModel.FKLinks.Add(fkLink);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"Schema built successfully with {tables.Count} tables");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error building schema from JSON: {ex.Message}");
+            throw;
+        }
     }
 }

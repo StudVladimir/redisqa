@@ -50,7 +50,7 @@
             
             <!-- Logo/Title -->
             <StackPanel Spacing="10" HorizontalAlignment="Center">
-                <TextBlock Text="Redis Query Architecture" 
+                <TextBlock Text="Redisqa" 
                            FontSize="32" 
                            FontWeight="Bold"
                            Foreground="#3d5af1"

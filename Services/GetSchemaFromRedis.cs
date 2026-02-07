@@ -75,7 +75,7 @@ public class GetSchemaFromRedis
         {
             System.Diagnostics.Debug.WriteLine($"Error loading schema from Redis: {ex.Message}");
             _cachedSchemaJson = null;
-            throw;
+            return null;
         }
     }
     

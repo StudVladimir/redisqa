@@ -89,3 +89,5 @@ orleans.codegen.cs
 .DS_Store
 
 /ER-Schema
+
+.env
