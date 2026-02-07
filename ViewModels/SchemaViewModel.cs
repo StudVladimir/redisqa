@@ -212,9 +212,8 @@ public class SchemaViewModel : BaseViewModel
             
             var jsonString = JsonSerializer.Serialize(schemaJson, options);
             
-            // Формируем ключ с timestamp
-            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            var redisKey = $"ERD-SCHEMA_{timestamp}";
+            var redisKey = $"ERD-SCHEMA";
+
             
             // Сохраняем в Redis как строку
             await db.StringSetAsync(redisKey, jsonString);
