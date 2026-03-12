@@ -13,8 +13,8 @@
         
         <!-- Toolbar -->
         <Border Grid.Row="0" 
-                Background="#1a1a2e" 
-                BorderBrush="#16213e"
+                Background="#34495e" 
+                BorderBrush="#2c3e50"
                 BorderThickness="0,0,0,2"
                 Padding="15">
             <Grid ColumnDefinitions="Auto,*,Auto">
@@ -25,7 +25,8 @@
                                FontSize="20" 
                                FontWeight="Bold"
                                Foreground="#ecf0f1"
-                               VerticalAlignment="Center"/>
+                               VerticalAlignment="Center"
+                               Margin="0,0,15,0"/>
                     <Border Background="#28B57D" 
                             CornerRadius="4" 
                             Padding="8,4">
@@ -38,7 +39,7 @@
                 
                 <!-- Tools -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10">
-                    <Button Content="+ Add Table"
+                    <Button Content="Add Table"
                             x:Name="BtnAddTable"
                             Background="#3d5af1"
                             Foreground="White"
@@ -66,20 +67,14 @@
         
         <!-- Canvas Area -->
         <Border Grid.Row="1" 
-                ClipToBounds="True">
-            <Border.Background>
-                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-                    <GradientStop Color="#020024" Offset="0"/>
-                    <GradientStop Color="#090979" Offset="0.5"/>
-                    <GradientStop Color="#28B57D" Offset="1"/>
-                </LinearGradientBrush>
-            </Border.Background>
+                ClipToBounds="True"
+                Background="#2c3e50">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" 
                           VerticalScrollBarVisibility="Auto">
                 <Canvas x:Name="SchemaCanvas" 
                         Width="2000" 
                         Height="1500"
-                        Background="Transparent">
+                        Background="#2c3e50">
                     <!-- Tables will be added programmatically -->
                 </Canvas>
             </ScrollViewer>
