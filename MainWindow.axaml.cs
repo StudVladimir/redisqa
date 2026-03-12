@@ -299,15 +299,81 @@ public partial class MainWindow : Window
     
     private void HighlightTab(Button button)
     {
-        // Сбрасываем предыдущую выбранную вкладку
-        if (_selectedTabButton != null)
-        {
-            _selectedTabButton.Classes.Remove("active");
-        }
-
-        // Активируем новую вкладку
+        // Скрываем все индикаторы
+        var schemaIndicator = this.FindControl<Border>("SchemaIndicator");
+        var queriesIndicator = this.FindControl<Border>("QueriesIndicator");
+        var dataIndicator = this.FindControl<Border>("DataIndicator");
+        
+        if (schemaIndicator != null) schemaIndicator.IsVisible = false;
+        if (queriesIndicator != null) queriesIndicator.IsVisible = false;
+        if (dataIndicator != null) dataIndicator.IsVisible = false;
+        
+        // Удаляем класс active у всех кнопок
+        var btnSchema = this.FindControl<Button>("BtnSchema");
+        var btnQueries = this.FindControl<Button>("BtnQueries");
+        var btnData = this.FindControl<Button>("BtnData");
+        
+        if (btnSchema != null) btnSchema.Classes.Remove("active");
+        if (btnQueries != null) btnQueries.Classes.Remove("active");
+        if (btnData != null) btnData.Classes.Remove("active");
+        
+        // Активируем нужную кнопку и индикатор
         button.Classes.Add("active");
+        
+        if (button.Name == "BtnSchema" && schemaIndicator != null)
+        {
+            schemaIndicator.IsVisible = true;
+        }
+        else if (button.Name == "BtnQueries" && queriesIndicator != null)
+        {
+            queriesIndicator.IsVisible = true;
+        }
+        else if (button.Name == "BtnData" && dataIndicator != null)
+        {
+            dataIndicator.IsVisible = true;
+        }
+        
         _selectedTabButton = button;
+    }
+    
+    private void TabButton_PointerEntered(object? sender, Avalonia.Input.PointerEventArgs e)
+    {
+        if (sender is not Button button) return;
+        
+        // Получаем соответствующий hover индикатор
+        Border? hoverIndicator = button.Name switch
+        {
+            "BtnSchema" => this.FindControl<Border>("SchemaHoverIndicator"),
+            "BtnQueries" => this.FindControl<Border>("QueriesHoverIndicator"),
+            "BtnData" => this.FindControl<Border>("DataHoverIndicator"),
+            _ => null
+        };
+        
+        // Показываем hover индикатор, только если это не активная кнопка
+        if (hoverIndicator != null && !button.Classes.Contains("active"))
+        {
+            hoverIndicator.IsVisible = true;
+        }
+    }
+    
+    private void TabButton_PointerExited(object? sender, Avalonia.Input.PointerEventArgs e)
+    {
+        if (sender is not Button button) return;
+        
+        // Получаем соответствующий hover индикатор
+        Border? hoverIndicator = button.Name switch
+        {
+            "BtnSchema" => this.FindControl<Border>("SchemaHoverIndicator"),
+            "BtnQueries" => this.FindControl<Border>("QueriesHoverIndicator"),
+            "BtnData" => this.FindControl<Border>("DataHoverIndicator"),
+            _ => null
+        };
+        
+        // Скрываем hover индикатор
+        if (hoverIndicator != null)
+        {
+            hoverIndicator.IsVisible = false;
+        }
     }
 
     private void BtnDb0_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

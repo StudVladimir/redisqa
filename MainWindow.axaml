@@ -23,30 +23,27 @@
                 </Style>
                 
                 <Style Selector="Button.tab-button" x:DataType="Button">
-                        <Setter Property="Margin" Value="0,4,0,0"/>
+                        <Setter Property="Margin" Value="0"/>
                         <Setter Property="HorizontalAlignment" Value="Stretch"/>
-                        <Setter Property="Background" Value="#2c3e50"/>
+                        <Setter Property="VerticalAlignment" Value="Stretch"/>
+                        <Setter Property="Background" Value="Transparent"/>
                         <Setter Property="Foreground" Value="#95a5a6"/>
-                        <Setter Property="BorderThickness" Value="0,0,1,2"/>
-                        <Setter Property="BorderBrush" Value="#1a252f"/>
-                        <Setter Property="Padding" Value="20,8,20,10"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Padding" Value="0,0,0,0"/>
                         <Setter Property="FontSize" Value="14"/>
                         <Setter Property="FontWeight" Value="Normal"/>
-                        <Setter Property="CornerRadius" Value="0,0,8,0"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                        <Setter Property="VerticalContentAlignment" Value="Center"/>
+                        <Setter Property="Cursor" Value="Hand"/>
                 </Style>
                 
                 <Style Selector="Button.tab-button:pointerover">
-                        <Setter Property="Background" Value="#34495e"/>
-                        <Setter Property="Foreground" Value="#bdc3c7"/>
+                        <Setter Property="Foreground" Value="#ecf0f1"/>
                 </Style>
                 
                 <Style Selector="Button.tab-button.active">
-                        <Setter Property="Margin" Value="0"/>
-                        <Setter Property="Background" Value="#7ed796"/>
-                        <Setter Property="Foreground" Value="#2c3e50"/>
-                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Foreground" Value="#ecf0f1"/>
                         <Setter Property="FontWeight" Value="SemiBold"/>
-                        <Setter Property="Padding" Value="20,12,20,12"/>
                 </Style>
         </Window.Styles>
 
@@ -192,25 +189,71 @@
                         </ScrollViewer>
                 </Border>
 
-                <Border Grid.Column="1" Grid.Row="0" Background="#2c3e50" Padding="0">
-                        <Grid ColumnDefinitions="*,*,*">
-                                <Button x:Name="BtnSchema"
-                                        Classes="tab-button"
-                                        Content="Schema"
-                                        Click="BtnSchema_Click"
-                                        Grid.Column="0"/>
+                <Border Grid.Column="1" Grid.Row="0" Background="#2c3e50">
+                        <Grid RowDefinitions="*,3">
+                                <!-- Кнопки навигации -->
+                                <Grid Grid.Row="0" ColumnDefinitions="*,*,*">
+                                        <Button x:Name="BtnSchema"
+                                                Classes="tab-button"
+                                                Content="Schema"
+                                                Click="BtnSchema_Click"
+                                                PointerEntered="TabButton_PointerEntered"
+                                                PointerExited="TabButton_PointerExited"
+                                                Grid.Column="0"/>
 
-                                <Button x:Name="BtnQueries"
-                                        Classes="tab-button"
-                                        Content="Queries"
-                                        Click="BtnQueries_Click"
-                                        Grid.Column="1"/>
+                                        <Button x:Name="BtnQueries"
+                                                Classes="tab-button"
+                                                Content="Queries"
+                                                Click="BtnQueries_Click"
+                                                PointerEntered="TabButton_PointerEntered"
+                                                PointerExited="TabButton_PointerExited"
+                                                Grid.Column="1"/>
+                                        
+                                        <Button x:Name="BtnData"
+                                                Classes="tab-button"
+                                                Content="Data"
+                                                Click="BtnData_Click"
+                                                PointerEntered="TabButton_PointerEntered"
+                                                PointerExited="TabButton_PointerExited"
+                                                Grid.Column="2"/>
+                                </Grid>
                                 
-                                <Button x:Name="BtnData"
-                                        Classes="tab-button"
-                                        Content="Data"
-                                        Click="BtnData_Click"
-                                        Grid.Column="2"/>
+                                <!-- Линия-индикатор внизу -->
+                                <Grid Grid.Row="1" ColumnDefinitions="*,*,*" Background="#1a252f">
+                                        <!-- Hover индикаторы (светло-серые) -->
+                                        <Border x:Name="SchemaHoverIndicator"
+                                                Grid.Column="0"
+                                                Background="#4a5f7f"
+                                                Height="3"
+                                                IsVisible="False"/>
+                                        <Border x:Name="QueriesHoverIndicator"
+                                                Grid.Column="1"
+                                                Background="#4a5f7f"
+                                                Height="3"
+                                                IsVisible="False"/>
+                                        <Border x:Name="DataHoverIndicator"
+                                                Grid.Column="2"
+                                                Background="#4a5f7f"
+                                                Height="3"
+                                                IsVisible="False"/>
+                                        
+                                        <!-- Active индикаторы (белые) -->
+                                        <Border x:Name="SchemaIndicator"
+                                                Grid.Column="0"
+                                                Background="White"
+                                                Height="3"
+                                                IsVisible="True"/>
+                                        <Border x:Name="QueriesIndicator"
+                                                Grid.Column="1"
+                                                Background="White"
+                                                Height="3"
+                                                IsVisible="False"/>
+                                        <Border x:Name="DataIndicator"
+                                                Grid.Column="2"
+                                                Background="White"
+                                                Height="3"
+                                                IsVisible="False"/>
+                                </Grid>
                         </Grid>
                 </Border>
 
