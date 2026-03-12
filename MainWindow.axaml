@@ -121,101 +121,72 @@
                                                 </Grid>
                                         </Border>
 
-                                        <Button x:Name="btnDb0" 
-                                                Classes="db-button"
-                                                Content="📁 db_0" 
-                                                Click="BtnDb_Click"
-                                                Tag="0"/>
-
-                                        <Button x:Name="btnDb1" 
-                                                Classes="db-button"
-                                                Content="📁 db_1" 
-                                                Click="BtnDb_Click"
-                                                Tag="1"/>
-
-                                        <Button x:Name="btnDb2" 
-                                                Classes="db-button"
-                                                Content="📁 db_2" 
-                                                Click="BtnDb_Click"
-                                                Tag="2"/>
-                                        
-                                        <Button x:Name="btnDb3" 
-                                                Classes="db-button"
-                                                Content="📁 db_3" 
-                                                Click="BtnDb_Click"
-                                                Tag="3"/>
-                                        
-                                        <Button x:Name="btnDb4" 
-                                                Classes="db-button"
-                                                Content="📁 db_4" 
-                                                Click="BtnDb_Click"
-                                                Tag="4"/>
-
-                                        <Button x:Name="btnDb5" 
-                                                Classes="db-button"
-                                                Content="📁 db_5" 
-                                                Click="BtnDb_Click"
-                                                Tag="5"/>
-                                        
-                                        <Button x:Name="btnDb6" 
-                                                Classes="db-button"
-                                                Content="📁 db_6" 
-                                                Click="BtnDb_Click"
-                                                Tag="6"/>
-                                        
-                                        <Button x:Name="btnDb7" 
-                                                Classes="db-button"
-                                                Content="📁 db_7" 
-                                                Click="BtnDb_Click"
-                                                Tag="7"/>
-
-                                        <Button x:Name="btnDb8" 
-                                                Classes="db-button"
-                                                Content="📁 db_8" 
-                                                Click="BtnDb_Click"
-                                                Tag="8"/>
-                                        
-                                        <Button x:Name="btnDb9" 
-                                                Classes="db-button"
-                                                Content="📁 db_9" 
-                                                Click="BtnDb_Click"
-                                                Tag="9"/>
-
-                                        <Button x:Name="btnDb10" 
-                                                Classes="db-button"
-                                                Content="📁 db_10" 
-                                                Click="BtnDb_Click"
-                                                Tag="10"/>
-                                        
-                                        <Button x:Name="btnDb11" 
-                                                Classes="db-button"
-                                                Content="📁 db_11" 
-                                                Click="BtnDb_Click"
-                                                Tag="11"/>
-                                        
-                                        <Button x:Name="btnDb12" 
-                                                Classes="db-button"
-                                                Content="📁 db_12" 
-                                                Click="BtnDb_Click"
-                                                Tag="12"/>
-
-                                        <Button x:Name="btnDb13" 
-                                                Classes="db-button"
-                                                Content="📁 db_13" 
-                                                Click="BtnDb_Click"
-                                                Tag="13"/>
-                                        
-                                        <Button x:Name="btnDb14" 
-                                                Classes="db-button"
-                                                Content="📁 db_14" 
-                                                Click="BtnDb_Click"
-                                                Tag="14"/>
-
-                                        <Button x:Name="btnDb15" 
-                                                Classes="db-button"
-                                                Content="📁 db_15" 
-                                                Click="BtnDb_Click"
-                                                Tag="15"/>
+                                        <!-- Database Selector -->
+                                        <Border Background="#34495e" 
+                                                CornerRadius="8" 
+                                                Padding="12"
+                                                Margin="0,10,0,10">
+                                                <StackPanel>
+                                                        <TextBlock Text="DATABASE" 
+                                                                   FontSize="11" 
+                                                                   FontWeight="Bold"
+                                                                   Foreground="#95a5a6"
+                                                                   Margin="0,0,0,8"/>
+                                                        
+                                                        <!-- Display current DB / Click to edit -->
+                                                        <Border x:Name="DbDisplayBorder"
+                                                                Background="#2c3e50"
+                                                                CornerRadius="6"
+                                                                Padding="10,8"
+                                                                Cursor="Hand"
+                                                                PointerPressed="DbDisplay_PointerPressed">
+                                                                <Grid ColumnDefinitions="Auto,*">
+                                                                        <TextBlock Grid.Column="0"
+                                                                                   Text="📁"
+                                                                                   FontSize="16"
+                                                                                   VerticalAlignment="Center"
+                                                                                   Margin="0,0,8,0"/>
+                                                                        <TextBlock Grid.Column="1"
+                                                                                   x:Name="DbDisplayText"
+                                                                                   Text="{Binding SelectedDb, StringFormat='db_{0}', FallbackValue='db_0'}"
+                                                                                   FontSize="14"
+                                                                                   FontWeight="SemiBold"
+                                                                                   Foreground="#ecf0f1"
+                                                                                   VerticalAlignment="Center"/>
+                                                                </Grid>
+                                                        </Border>
+                                                        
+                                                        <!-- Input field (hidden by default) -->
+                                                        <Border x:Name="DbInputBorder"
+                                                                Background="#2c3e50"
+                                                                CornerRadius="6"
+                                                                Padding="10,8"
+                                                                IsVisible="False">
+                                                                <Grid ColumnDefinitions="*,Auto">
+                                                                        <TextBox x:Name="DbInputTextBox"
+                                                                                 Grid.Column="0"
+                                                                                 Watermark="Enter 0-15"
+                                                                                 FontSize="14"
+                                                                                 Background="Transparent"
+                                                                                 BorderThickness="0"
+                                                                                 Foreground="#ecf0f1"
+                                                                                 VerticalContentAlignment="Center"
+                                                                                 KeyDown="DbInput_KeyDown"/>
+                                                                        <Button Grid.Column="1"
+                                                                                Content="✓"
+                                                                                Background="#27ae60"
+                                                                                Foreground="White"
+                                                                                BorderThickness="0"
+                                                                                Padding="8,4"
+                                                                                Margin="5,0,0,0"
+                                                                                FontSize="14"
+                                                                                FontWeight="Bold"
+                                                                                CornerRadius="4"
+                                                                                Click="DbInputConfirm_Click"/>
+                                                                </Grid>
+                                                        </Border>
+                                                </StackPanel>
+                                        </Border>
                                         
                                 </StackPanel>
                         </ScrollViewer>
