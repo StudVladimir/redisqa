@@ -10,11 +10,17 @@ namespace redisqa.Services;
 
 public class RedisQueryExecutor
 {
+    private const int RedisHashBatchSize = 200;
+
     private static readonly Regex SelectAllFromTableRegex = new(
         @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public async Task<QueryExecutionResult> ExecuteAsync(string queryText, int selectedDb)
+    public async Task<QueryExecutionResult> ExecuteAsync(
+        string queryText,
+        int selectedDb,
+        int pageNumber,
+        int pageSize)
     {
         if (!RedisConnectionService.Instance.IsConnected)
         {
@@ -31,7 +37,17 @@ public class RedisQueryExecutor
             return QueryExecutionResult.Fail("Invalid query format. Expected: SELECT * FROM {table_name}");
         }
 
-        return await ExecuteSelectAllFromTableAsync(tableName, selectedDb);
+        if (pageNumber < 1)
+        {
+            pageNumber = 1;
+        }
+
+        if (pageSize < 1)
+        {
+            pageSize = 1;
+        }
+
+        return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
     }
 
     private static bool TryParseSelectAllFromTable(string queryText, out string tableName)
@@ -48,7 +64,11 @@ public class RedisQueryExecutor
         return !string.IsNullOrWhiteSpace(tableName);
     }
 
-    private async Task<QueryExecutionResult> ExecuteSelectAllFromTableAsync(string tableName, int selectedDb)
+    private async Task<QueryExecutionResult> ExecuteSelectAllFromTableAsync(
+        string tableName,
+        int selectedDb,
+        int pageNumber,
+        int pageSize)
     {
         var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
         if (db == null)
@@ -57,18 +77,27 @@ public class RedisQueryExecutor
         }
 
         var (resolvedTableName, ids) = await LoadIdsAsync(db, tableName, selectedDb);
-        if (ids.Count == 0)
+        var totalRows = ids.Count;
+
+        if (totalRows == 0)
         {
             return QueryExecutionResult.Success(
                 new List<string> { "id" },
-                new List<Dictionary<string, string>>());
+                new List<Dictionary<string, string>>(),
+                totalRows,
+                1,
+                pageSize);
         }
 
-        var hashTasks = ids
-            .Select(id => db.HashGetAllAsync($"{resolvedTableName}:{id}"))
-            .ToArray();
+        var totalPages = (int)Math.Ceiling(totalRows / (double)pageSize);
+        var normalizedPageNumber = Math.Clamp(pageNumber, 1, totalPages);
 
-        var hashes = await Task.WhenAll(hashTasks);
+        var pagedIds = ids
+            .Skip((normalizedPageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+
+        var hashes = await LoadHashesByIdsAsync(db, resolvedTableName, pagedIds, RedisHashBatchSize);
 
         var fieldNames = new List<string>();
         var seenFields = new HashSet<string>(StringComparer.Ordinal);
@@ -88,12 +117,12 @@ public class RedisQueryExecutor
         var columns = new List<string> { "id" };
         columns.AddRange(fieldNames);
 
-        var rows = new List<Dictionary<string, string>>(ids.Count);
-        for (var index = 0; index < ids.Count; index++)
+        var rows = new List<Dictionary<string, string>>(pagedIds.Count);
+        for (var index = 0; index < pagedIds.Count; index++)
         {
             var row = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["id"] = ids[index]
+                ["id"] = pagedIds[index]
             };
 
             foreach (var fieldName in fieldNames)
@@ -109,7 +138,45 @@ public class RedisQueryExecutor
             rows.Add(row);
         }
 
-        return QueryExecutionResult.Success(columns, rows);
+        return QueryExecutionResult.Success(
+            columns,
+            rows,
+            totalRows,
+            normalizedPageNumber,
+            pageSize);
+    }
+
+    private static async Task<List<HashEntry[]>> LoadHashesByIdsAsync(
+        IDatabase db,
+        string tableName,
+        List<string> ids,
+        int batchSize)
+    {
+        var hashes = new List<HashEntry[]>(ids.Count);
+
+        for (var offset = 0; offset < ids.Count; offset += batchSize)
+        {
+            var chunk = ids
+                .Skip(offset)
+                .Take(batchSize)
+                .ToArray();
+
+            var batch = db.CreateBatch();
+            var batchTasks = new Task<HashEntry[]>[chunk.Length];
+
+            for (var index = 0; index < chunk.Length; index++)
+            {
+                var id = chunk[index];
+                batchTasks[index] = batch.HashGetAllAsync($"{tableName}:{id}");
+            }
+
+            batch.Execute();
+
+            var chunkHashes = await Task.WhenAll(batchTasks);
+            hashes.AddRange(chunkHashes);
+        }
+
+        return hashes;
     }
 
     private async Task<(string resolvedTableName, List<string> ids)> LoadIdsAsync(
@@ -257,24 +324,43 @@ public sealed class QueryExecutionResult
     public string? ErrorMessage { get; }
     public IReadOnlyList<string> Columns { get; }
     public IReadOnlyList<Dictionary<string, string>> Rows { get; }
+    public int TotalRows { get; }
+    public int PageNumber { get; }
+    public int PageSize { get; }
 
     private QueryExecutionResult(
         bool isSuccess,
         string? errorMessage,
         IReadOnlyList<string> columns,
-        IReadOnlyList<Dictionary<string, string>> rows)
+        IReadOnlyList<Dictionary<string, string>> rows,
+        int totalRows,
+        int pageNumber,
+        int pageSize)
     {
         IsSuccess = isSuccess;
         ErrorMessage = errorMessage;
         Columns = columns;
         Rows = rows;
+        TotalRows = totalRows;
+        PageNumber = pageNumber;
+        PageSize = pageSize;
     }
 
     public static QueryExecutionResult Success(
         IReadOnlyList<string> columns,
-        IReadOnlyList<Dictionary<string, string>> rows)
+        IReadOnlyList<Dictionary<string, string>> rows,
+        int totalRows,
+        int pageNumber,
+        int pageSize)
     {
-        return new QueryExecutionResult(true, null, columns, rows);
+        return new QueryExecutionResult(
+            true,
+            null,
+            columns,
+            rows,
+            totalRows,
+            pageNumber,
+            pageSize);
     }
 
     public static QueryExecutionResult Fail(string errorMessage)
@@ -283,6 +369,9 @@ public sealed class QueryExecutionResult
             false,
             errorMessage,
             Array.Empty<string>(),
-            Array.Empty<Dictionary<string, string>>());
+            Array.Empty<Dictionary<string, string>>(),
+            0,
+            1,
+            0);
     }
 }
