@@ -1,0 +1,107 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+			 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+			 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+			 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+			 xmlns:vm="using:redisqa.ViewModels"
+			 mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+			 x:Class="redisqa.Views.QueryView.QueryView"
+			 x:DataType="vm:QueryViewModel">
+
+	<Design.DataContext>
+		<vm:QueryViewModel/>
+	</Design.DataContext>
+
+	<Grid RowDefinitions="Auto,*">
+		<Border Grid.Row="0"
+				Background="#34495e"
+				Padding="20"
+				BorderBrush="#2c3e50"
+				BorderThickness="0,0,0,2">
+			<StackPanel Spacing="10">
+				<TextBlock Text="Query Console"
+						   FontSize="20"
+						   FontWeight="Bold"
+						   Foreground="#ecf0f1"/>
+
+				<StackPanel Orientation="Horizontal" Spacing="15">
+					<TextBlock Text="{Binding SelectedDb, StringFormat='DB: {0}'}"
+							   FontSize="12"
+							   Foreground="#95a5a6"/>
+					<TextBlock Text="{Binding QueryResults.Count, StringFormat='Rows: {0}'}"
+							   FontSize="12"
+							   Foreground="#95a5a6"/>
+				</StackPanel>
+
+				<Grid ColumnDefinitions="*,Auto" Margin="0,10,0,0" ColumnSpacing="10">
+					<TextBox x:Name="QueryInput"
+							 Grid.Column="0"
+							 Text="{Binding QueryText, Mode=TwoWay}"
+							 Watermark="Enter query (for example: SELECT * FROM users LIMIT 100)"
+							 Height="38"
+							 Background="#2c3e50"
+							 Foreground="#ecf0f1"
+							 BorderBrush="#3498db"
+							 BorderThickness="1"
+							 VerticalContentAlignment="Center"
+							 Padding="12,0"/>
+
+					<Button x:Name="BtnRunQuery"
+							Grid.Column="1"
+							Content="Run"
+							Width="90"
+							Height="38"
+							Background="#3d5af1"
+							Foreground="White"
+							BorderThickness="0"
+							FontWeight="SemiBold"
+							CornerRadius="5"
+							IsEnabled="{Binding CanRunQuery}"/>
+				</Grid>
+			</StackPanel>
+		</Border>
+
+		<Grid Grid.Row="1" Background="#2c3e50" RowDefinitions="Auto,*">
+			<Border Grid.Row="0"
+					Background="#34495e"
+					BorderBrush="#1f2d3a"
+					BorderThickness="0,0,0,1"
+					Padding="12,10">
+				<Grid ColumnDefinitions="2*,2*,2*,2*" ColumnSpacing="8">
+					<TextBlock Grid.Column="0" Text="Column 1" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
+					<TextBlock Grid.Column="1" Text="Column 2" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
+					<TextBlock Grid.Column="2" Text="Column 3" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
+					<TextBlock Grid.Column="3" Text="Column 4" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
+				</Grid>
+			</Border>
+
+			<Grid Grid.Row="1">
+				<ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" IsVisible="{Binding HasResults}">
+					<ItemsControl ItemsSource="{Binding QueryResults}">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate x:DataType="vm:QueryResultRow">
+								<Border BorderBrush="#1f2d3a" BorderThickness="0,0,0,1" Padding="12,10">
+									<Grid ColumnDefinitions="2*,2*,2*,2*" ColumnSpacing="8">
+										<TextBlock Grid.Column="0" Text="{Binding Column1}" Foreground="#ecf0f1" FontSize="12"/>
+										<TextBlock Grid.Column="1" Text="{Binding Column2}" Foreground="#ecf0f1" FontSize="12"/>
+										<TextBlock Grid.Column="2" Text="{Binding Column3}" Foreground="#ecf0f1" FontSize="12"/>
+										<TextBlock Grid.Column="3" Text="{Binding Column4}" Foreground="#ecf0f1" FontSize="12"/>
+									</Grid>
+								</Border>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+				</ScrollViewer>
+
+				<StackPanel VerticalAlignment="Center"
+							HorizontalAlignment="Center"
+							Spacing="10"
+							IsVisible="{Binding !HasResults}">
+					<TextBlock Text="Run a query to see results"
+							   Foreground="#95a5a6"
+							   FontSize="16"
+							   HorizontalAlignment="Center"/>
+				</StackPanel>
+			</Grid>
+		</Grid>
+	</Grid>
+</UserControl>

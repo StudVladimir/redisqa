@@ -82,7 +82,7 @@ public partial class MainWindow : Window
                 _viewModel.NavigateToData();
                 break;
             case ActiveView.Queries:
-                // TODO: Implement when queries view is ready
+                _viewModel.NavigateToQueries();
                 break;
             case ActiveView.Home:
             case ActiveView.None:
@@ -140,7 +140,7 @@ public partial class MainWindow : Window
     private void BtnQueries_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _currentActiveView = ActiveView.Queries;
-        // TODO: Implement queries navigation
+        _viewModel.NavigateToQueries();
         if (sender is Button button)
         {
             HighlightTab(button);

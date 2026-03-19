@@ -259,6 +259,12 @@ public class DataViewModel : BaseViewModel
                         errorCount++;
                         continue;
                     }
+
+                    // Добавляем значение PK в общий set таблицы: idx:pk:{Table_Name}:{Attribute_name}
+                    var pkSetKey = $"idx:pk:{SelectedTable}:{pkColumn.Trim()}";
+                    await db.SetAddAsync(pkSetKey, pkValueTrimmed);
+                    System.Diagnostics.Debug.WriteLine($"Added PK to set: {pkSetKey} -> {pkValueTrimmed}");
+                    
                     
                     // Создаем индексы для indexed columns
                     foreach (var indexedColumn in indexedColumns)

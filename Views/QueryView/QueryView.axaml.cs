@@ -1,0 +1,29 @@
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using redisqa.ViewModels;
+
+namespace redisqa.Views.QueryView;
+
+public partial class QueryView : UserControl
+{
+	private readonly QueryViewModel _viewModel;
+
+	public QueryView()
+	{
+		InitializeComponent();
+
+		_viewModel = new QueryViewModel();
+		DataContext = _viewModel;
+
+		var btnRunQuery = this.FindControl<Button>("BtnRunQuery");
+		if (btnRunQuery != null)
+		{
+			btnRunQuery.Click += BtnRunQuery_Click;
+		}
+	}
+
+	private void BtnRunQuery_Click(object? sender, RoutedEventArgs e)
+	{
+		// Query execution will be added in the next step.
+	}
+}

@@ -173,4 +173,15 @@ public class MainWindowViewModel: BaseViewModel
         }
         CurrentView = dataView;
     }
+
+    public void NavigateToQueries()
+    {
+        var queryView = new Views.QueryView.QueryView();
+        // Передаем выбранную БД в QueryViewModel
+        if (queryView.DataContext is QueryViewModel queryViewModel && SelectedDb.HasValue)
+        {
+            queryViewModel.SelectedDb = SelectedDb.Value;
+        }
+        CurrentView = queryView;
+    }
 }
