@@ -22,8 +22,8 @@ public partial class QueryView : UserControl
 		}
 	}
 
-	private void BtnRunQuery_Click(object? sender, RoutedEventArgs e)
+	private async void BtnRunQuery_Click(object? sender, RoutedEventArgs e)
 	{
-		// Query execution will be added in the next step.
+		await _viewModel.RunQueryAsync();
 	}
 }
