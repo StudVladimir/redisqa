@@ -27,7 +27,7 @@
 					<TextBlock Text="{Binding SelectedDb, StringFormat='DB: {0}'}"
 							   FontSize="12"
 							   Foreground="#95a5a6"/>
-					<TextBlock Text="{Binding QueryResults.Count, StringFormat='Rows: {0}'}"
+					<TextBlock Text="{Binding RowsInfoText}"
 							   FontSize="12"
 							   Foreground="#95a5a6"/>
 				</StackPanel>
@@ -36,7 +36,7 @@
 					<TextBox x:Name="QueryInput"
 							 Grid.Column="0"
 							 Text="{Binding QueryText, Mode=TwoWay}"
-							 Watermark="Enter query (for example: SELECT * FROM users LIMIT 100)"
+							 Watermark="Enter query (for example: SELECT * FROM users)"
 							 Height="38"
 							 Background="#2c3e50"
 							 Foreground="#ecf0f1"
@@ -57,6 +57,50 @@
 							CornerRadius="5"
 							IsEnabled="{Binding CanRunQuery}"/>
 				</Grid>
+
+				<StackPanel Orientation="Horizontal" Spacing="10" Margin="0,2,0,0">
+					<Button x:Name="BtnPrevPage"
+							Content="Prev"
+							Width="70"
+							Height="32"
+							Background="#3b4c5e"
+							Foreground="White"
+							BorderThickness="0"
+							CornerRadius="5"
+							IsEnabled="{Binding CanGoPrevious}"/>
+
+					<TextBlock Text="{Binding PageStatusText}"
+							   VerticalAlignment="Center"
+							   FontSize="12"
+							   Foreground="#bdc3c7"/>
+
+					<Button x:Name="BtnNextPage"
+							Content="Next"
+							Width="70"
+							Height="32"
+							Background="#3b4c5e"
+							Foreground="White"
+							BorderThickness="0"
+							CornerRadius="5"
+							IsEnabled="{Binding CanGoNext}"/>
+
+					<TextBlock Text="Page size:"
+							   VerticalAlignment="Center"
+							   FontSize="12"
+							   Foreground="#bdc3c7"/>
+
+					<ComboBox x:Name="PageSizeCombo"
+						  Width="90"
+						  Height="32"
+						  SelectedItem="{Binding PageSize, Mode=TwoWay}"
+						  ItemsSource="{Binding PageSizeOptions}"/>
+				</StackPanel>
+
+				<TextBlock Text="{Binding QueryErrorMessage}"
+						   Foreground="#ff6b6b"
+						   FontSize="12"
+						   TextWrapping="Wrap"
+						   IsVisible="{Binding HasQueryError}"/>
 			</StackPanel>
 		</Border>
 
@@ -65,38 +109,84 @@
 					Background="#34495e"
 					BorderBrush="#1f2d3a"
 					BorderThickness="0,0,0,1"
-					Padding="12,10">
-				<Grid ColumnDefinitions="2*,2*,2*,2*" ColumnSpacing="8">
-					<TextBlock Grid.Column="0" Text="Column 1" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
-					<TextBlock Grid.Column="1" Text="Column 2" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
-					<TextBlock Grid.Column="2" Text="Column 3" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
-					<TextBlock Grid.Column="3" Text="Column 4" Foreground="#bdc3c7" FontSize="12" FontWeight="SemiBold"/>
-				</Grid>
+					Padding="12,10"
+					IsVisible="{Binding HasResults}">
+				<ItemsControl ItemsSource="{Binding QueryColumns}">
+					<ItemsControl.ItemsPanel>
+						<ItemsPanelTemplate>
+							<StackPanel Orientation="Horizontal"/>
+						</ItemsPanelTemplate>
+					</ItemsControl.ItemsPanel>
+					<ItemsControl.ItemTemplate>
+						<DataTemplate x:DataType="x:String">
+							<Border Width="180" Padding="0,0,8,0">
+								<TextBlock Text="{Binding .}"
+										   Foreground="#bdc3c7"
+										   FontSize="12"
+										   FontWeight="SemiBold"
+										   TextTrimming="CharacterEllipsis"/>
+							</Border>
+						</DataTemplate>
+					</ItemsControl.ItemTemplate>
+				</ItemsControl>
 			</Border>
 
 			<Grid Grid.Row="1">
-				<ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" IsVisible="{Binding HasResults}">
-					<ItemsControl ItemsSource="{Binding QueryResults}">
-						<ItemsControl.ItemTemplate>
-							<DataTemplate x:DataType="vm:QueryResultRow">
-								<Border BorderBrush="#1f2d3a" BorderThickness="0,0,0,1" Padding="12,10">
-									<Grid ColumnDefinitions="2*,2*,2*,2*" ColumnSpacing="8">
-										<TextBlock Grid.Column="0" Text="{Binding Column1}" Foreground="#ecf0f1" FontSize="12"/>
-										<TextBlock Grid.Column="1" Text="{Binding Column2}" Foreground="#ecf0f1" FontSize="12"/>
-										<TextBlock Grid.Column="2" Text="{Binding Column3}" Foreground="#ecf0f1" FontSize="12"/>
-										<TextBlock Grid.Column="3" Text="{Binding Column4}" Foreground="#ecf0f1" FontSize="12"/>
-									</Grid>
-								</Border>
-							</DataTemplate>
-						</ItemsControl.ItemTemplate>
-					</ItemsControl>
-				</ScrollViewer>
+				<ListBox ItemsSource="{Binding QueryResults}"
+						 IsVisible="{Binding HasResults}"
+						 Background="Transparent"
+						 BorderThickness="0"
+						 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+						 ScrollViewer.VerticalScrollBarVisibility="Auto">
+					<ListBox.ItemsPanel>
+						<ItemsPanelTemplate>
+							<VirtualizingStackPanel/>
+						</ItemsPanelTemplate>
+					</ListBox.ItemsPanel>
+					<ListBox.Styles>
+						<Style Selector="ListBoxItem">
+							<Setter Property="Padding" Value="0"/>
+							<Setter Property="Margin" Value="0"/>
+							<Setter Property="BorderThickness" Value="0"/>
+							<Setter Property="Background" Value="Transparent"/>
+						</Style>
+						<Style Selector="ListBoxItem:pointerover">
+							<Setter Property="Background" Value="Transparent"/>
+						</Style>
+						<Style Selector="ListBoxItem:selected">
+							<Setter Property="Background" Value="Transparent"/>
+						</Style>
+					</ListBox.Styles>
+					<ListBox.ItemTemplate>
+						<DataTemplate x:DataType="vm:QueryResultRow">
+							<Border BorderBrush="#1f2d3a" BorderThickness="0,0,0,1" Padding="12,10">
+								<ItemsControl ItemsSource="{Binding Cells}">
+									<ItemsControl.ItemsPanel>
+										<ItemsPanelTemplate>
+											<StackPanel Orientation="Horizontal"/>
+										</ItemsPanelTemplate>
+									</ItemsControl.ItemsPanel>
+									<ItemsControl.ItemTemplate>
+										<DataTemplate x:DataType="x:String">
+											<Border Width="180" Padding="0,0,8,0">
+												<TextBlock Text="{Binding .}"
+														   Foreground="#ecf0f1"
+														   FontSize="12"
+														   TextTrimming="CharacterEllipsis"/>
+											</Border>
+										</DataTemplate>
+									</ItemsControl.ItemTemplate>
+								</ItemsControl>
+							</Border>
+						</DataTemplate>
+					</ListBox.ItemTemplate>
+				</ListBox>
 
 				<StackPanel VerticalAlignment="Center"
 							HorizontalAlignment="Center"
 							Spacing="10"
 							IsVisible="{Binding !HasResults}">
-					<TextBlock Text="Run a query to see results"
+					<TextBlock Text="{Binding EmptyStateMessage}"
 							   Foreground="#95a5a6"
 							   FontSize="16"
 							   HorizontalAlignment="Center"/>

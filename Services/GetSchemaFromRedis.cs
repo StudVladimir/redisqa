@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -27,6 +28,7 @@ public class GetSchemaFromRedis
     }
     
     private string? _cachedSchemaJson;
+    private readonly Dictionary<int, string> _cachedSchemasByDb = new();
     
     private GetSchemaFromRedis()
     {
@@ -42,6 +44,13 @@ public class GetSchemaFromRedis
     {
         try
         {
+            if (_cachedSchemasByDb.TryGetValue(selectedDb, out var cachedSchema) &&
+                !string.IsNullOrWhiteSpace(cachedSchema))
+            {
+                _cachedSchemaJson = cachedSchema;
+                return cachedSchema;
+            }
+
             // Check Redis connection
             if (!RedisConnectionService.Instance.IsConnected)
             {
@@ -64,20 +73,22 @@ public class GetSchemaFromRedis
             if (schemaValue.IsNullOrEmpty)
             {
                 System.Diagnostics.Debug.WriteLine($"Schema not found in Redis with key: {redisKey} in database {selectedDb}");
+                _cachedSchemasByDb.Remove(selectedDb);
                 _cachedSchemaJson = null;
                 return null;
             }
             
             // Save to cache and return
-            _cachedSchemaJson = schemaValue.ToString();
+            var schemaJson = schemaValue.ToString();
+            _cachedSchemaJson = schemaJson;
+            _cachedSchemasByDb[selectedDb] = schemaJson;
             System.Diagnostics.Debug.WriteLine($"Schema loaded from Redis with key: {redisKey} in database {selectedDb}");
             
-            return _cachedSchemaJson;
+            return schemaJson;
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Error loading schema from Redis: {ex.Message}");
-            _cachedSchemaJson = null;
             return null;
         }
     }
@@ -118,6 +129,16 @@ public class GetSchemaFromRedis
     {
         return _cachedSchemaJson;
     }
+
+    /// <summary>
+    /// Gets cached schema for selected database.
+    /// </summary>
+    public string? GetCachedSchema(int selectedDb)
+    {
+        return _cachedSchemasByDb.TryGetValue(selectedDb, out var schemaJson)
+            ? schemaJson
+            : null;
+    }
     
     /// <summary>
     /// Clears the cached schema
@@ -125,5 +146,6 @@ public class GetSchemaFromRedis
     public void ClearCache()
     {
         _cachedSchemaJson = null;
+        _cachedSchemasByDb.Clear();
     }
 }

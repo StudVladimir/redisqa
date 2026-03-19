@@ -20,10 +20,43 @@ public partial class QueryView : UserControl
 		{
 			btnRunQuery.Click += BtnRunQuery_Click;
 		}
+
+		var btnPrevPage = this.FindControl<Button>("BtnPrevPage");
+		if (btnPrevPage != null)
+		{
+			btnPrevPage.Click += BtnPrevPage_Click;
+		}
+
+		var btnNextPage = this.FindControl<Button>("BtnNextPage");
+		if (btnNextPage != null)
+		{
+			btnNextPage.Click += BtnNextPage_Click;
+		}
+
+		var pageSizeCombo = this.FindControl<ComboBox>("PageSizeCombo");
+		if (pageSizeCombo != null)
+		{
+			pageSizeCombo.SelectionChanged += PageSizeCombo_SelectionChanged;
+		}
 	}
 
-	private void BtnRunQuery_Click(object? sender, RoutedEventArgs e)
+	private async void BtnRunQuery_Click(object? sender, RoutedEventArgs e)
 	{
-		// Query execution will be added in the next step.
+		await _viewModel.RunQueryAsync(resetPage: true);
+	}
+
+	private async void BtnPrevPage_Click(object? sender, RoutedEventArgs e)
+	{
+		await _viewModel.LoadPreviousPageAsync();
+	}
+
+	private async void BtnNextPage_Click(object? sender, RoutedEventArgs e)
+	{
+		await _viewModel.LoadNextPageAsync();
+	}
+
+	private async void PageSizeCombo_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+	{
+		await _viewModel.ReloadWithCurrentPageSizeAsync();
 	}
 }
