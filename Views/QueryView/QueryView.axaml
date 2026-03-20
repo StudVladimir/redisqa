@@ -36,7 +36,7 @@
 					<TextBox x:Name="QueryInput"
 							 Grid.Column="0"
 							 Text="{Binding QueryText, Mode=TwoWay}"
-							 Watermark="Enter query (for example: SELECT * FROM users)"
+							 Watermark="Enter query (for example: SELECT * FROM users WHERE Status = Active)"
 							 Height="38"
 							 Background="#2c3e50"
 							 Foreground="#ecf0f1"

@@ -12,6 +12,10 @@ public class RedisQueryExecutor
 {
     private const int RedisHashBatchSize = 200;
 
+    private static readonly Regex SelectWhereFromTableRegex = new(
+        @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex SelectAllFromTableRegex = new(
         @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -32,9 +36,31 @@ public class RedisQueryExecutor
             return QueryExecutionResult.Fail("Query is empty.");
         }
 
+        if (TryParseSelectWhereFromTable(queryText, out var whereTableName, out var whereAttributeName, out var whereValue))
+        {
+            if (pageNumber < 1)
+            {
+                pageNumber = 1;
+            }
+
+            if (pageSize < 1)
+            {
+                pageSize = 1;
+            }
+
+            return await ExecuteSelectWhereFromTableAsync(
+                whereTableName,
+                whereAttributeName,
+                whereValue,
+                selectedDb,
+                pageNumber,
+                pageSize);
+        }
+
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
         {
-            return QueryExecutionResult.Fail("Invalid query format. Expected: SELECT * FROM {table_name}");
+            return QueryExecutionResult.Fail(
+                "Invalid query format. Expected: SELECT * FROM {table_name} or SELECT * FROM {table_name} WHERE {attribute_name} = {value}");
         }
 
         if (pageNumber < 1)
@@ -48,6 +74,49 @@ public class RedisQueryExecutor
         }
 
         return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+    }
+
+    private static bool TryParseSelectWhereFromTable(
+        string queryText,
+        out string tableName,
+        out string attributeName,
+        out string value)
+    {
+        tableName = string.Empty;
+        attributeName = string.Empty;
+        value = string.Empty;
+
+        var match = SelectWhereFromTableRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        tableName = match.Groups[1].Value;
+        attributeName = match.Groups[2].Value;
+        value = NormalizeWhereValue(match.Groups[3].Value);
+
+        return !string.IsNullOrWhiteSpace(tableName)
+               && !string.IsNullOrWhiteSpace(attributeName)
+               && !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static string NormalizeWhereValue(string rawValue)
+    {
+        var value = rawValue.Trim();
+
+        if (value.Length >= 2)
+        {
+            var hasSingleQuotes = value[0] == '\'' && value[^1] == '\'';
+            var hasDoubleQuotes = value[0] == '"' && value[^1] == '"';
+
+            if (hasSingleQuotes || hasDoubleQuotes)
+            {
+                value = value[1..^1].Trim();
+            }
+        }
+
+        return value;
     }
 
     private static bool TryParseSelectAllFromTable(string queryText, out string tableName)
@@ -77,6 +146,40 @@ public class RedisQueryExecutor
         }
 
         var (resolvedTableName, ids) = await LoadIdsAsync(db, tableName, selectedDb);
+        return await BuildPagedResultAsync(db, resolvedTableName, ids, pageNumber, pageSize);
+    }
+
+    private async Task<QueryExecutionResult> ExecuteSelectWhereFromTableAsync(
+        string tableName,
+        string attributeName,
+        string value,
+        int selectedDb,
+        int pageNumber,
+        int pageSize)
+    {
+        var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
+        if (db == null)
+        {
+            return QueryExecutionResult.Fail($"Failed to get Redis database {selectedDb}.");
+        }
+
+        var (resolvedTableName, ids) = await LoadIdsByIndexedAttributeAsync(
+            db,
+            tableName,
+            attributeName,
+            value,
+            selectedDb);
+
+        return await BuildPagedResultAsync(db, resolvedTableName, ids, pageNumber, pageSize);
+    }
+
+    private async Task<QueryExecutionResult> BuildPagedResultAsync(
+        IDatabase db,
+        string resolvedTableName,
+        List<string> ids,
+        int pageNumber,
+        int pageSize)
+    {
         var totalRows = ids.Count;
 
         if (totalRows == 0)
@@ -184,13 +287,7 @@ public class RedisQueryExecutor
         string tableName,
         int selectedDb)
     {
-        var schemaService = GetSchemaFromRedis.Instance;
-        var schemaJson = schemaService.GetCachedSchema(selectedDb);
-
-        if (string.IsNullOrWhiteSpace(schemaJson))
-        {
-            schemaJson = await schemaService.GetSchemaAsync(selectedDb);
-        }
+        var schemaJson = await GetSchemaJsonAsync(selectedDb);
 
         if (string.IsNullOrWhiteSpace(schemaJson))
         {
@@ -208,6 +305,50 @@ public class RedisQueryExecutor
         var ids = await db.SetMembersAsync(legacySetKey);
 
         return (tablePrimaryKeyInfo.resolvedTableName, NormalizeIds(ids));
+    }
+
+    private async Task<(string resolvedTableName, List<string> ids)> LoadIdsByIndexedAttributeAsync(
+        IDatabase db,
+        string tableName,
+        string attributeName,
+        string value,
+        int selectedDb)
+    {
+        var resolvedTableName = tableName;
+        var resolvedAttributeName = attributeName;
+
+        var schemaJson = await GetSchemaJsonAsync(selectedDb);
+        if (!string.IsNullOrWhiteSpace(schemaJson))
+        {
+            var resolvedNames = TryResolveTableAndAttribute(schemaJson, tableName, attributeName);
+            if (!string.IsNullOrWhiteSpace(resolvedNames.resolvedTableName))
+            {
+                resolvedTableName = resolvedNames.resolvedTableName;
+            }
+
+            if (!string.IsNullOrWhiteSpace(resolvedNames.resolvedAttributeName))
+            {
+                resolvedAttributeName = resolvedNames.resolvedAttributeName;
+            }
+        }
+
+        var indexSetKey = $"idx:{resolvedTableName}:{resolvedAttributeName}:{value}";
+        var ids = await db.SetMembersAsync(indexSetKey);
+
+        return (resolvedTableName, NormalizeIds(ids));
+    }
+
+    private static async Task<string?> GetSchemaJsonAsync(int selectedDb)
+    {
+        var schemaService = GetSchemaFromRedis.Instance;
+        var schemaJson = schemaService.GetCachedSchema(selectedDb);
+
+        if (!string.IsNullOrWhiteSpace(schemaJson))
+        {
+            return schemaJson;
+        }
+
+        return await schemaService.GetSchemaAsync(selectedDb);
     }
 
     private static List<string> NormalizeIds(IEnumerable<RedisValue> values)
@@ -269,6 +410,66 @@ public class RedisQueryExecutor
                     {
                         return (currentTableName, attributeName);
                     }
+                }
+
+                return (currentTableName, null);
+            }
+
+            return (null, null);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
+    private static (string? resolvedTableName, string? resolvedAttributeName) TryResolveTableAndAttribute(
+        string schemaJson,
+        string tableName,
+        string attributeName)
+    {
+        try
+        {
+            using var jsonDocument = JsonDocument.Parse(schemaJson);
+            var root = jsonDocument.RootElement;
+
+            if (!root.TryGetProperty("tables", out var tables))
+            {
+                return (null, null);
+            }
+
+            foreach (var table in tables.EnumerateArray())
+            {
+                if (!table.TryGetProperty("name", out var nameProperty))
+                {
+                    continue;
+                }
+
+                var currentTableName = nameProperty.GetString();
+                if (!string.Equals(currentTableName, tableName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!table.TryGetProperty("attributes", out var attributes))
+                {
+                    return (currentTableName, null);
+                }
+
+                foreach (var attribute in attributes.EnumerateArray())
+                {
+                    if (!attribute.TryGetProperty("name", out var attributeNameProperty))
+                    {
+                        continue;
+                    }
+
+                    var currentAttributeName = attributeNameProperty.GetString();
+                    if (!string.Equals(currentAttributeName, attributeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    return (currentTableName, currentAttributeName);
                 }
 
                 return (currentTableName, null);
