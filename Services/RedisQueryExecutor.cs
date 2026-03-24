@@ -12,6 +12,10 @@ public class RedisQueryExecutor
 {
     private const int RedisHashBatchSize = 200;
 
+    private static readonly Regex SelectOrderByLimitOffsetRegex = new(
+        @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+order\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\s+limit\s+(\d+)(?:\s+offset\s+(\d+))?\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex SelectWhereWithComparisonRegex = new(
         @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|>|<|=)\s*(.+?)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -34,6 +38,26 @@ public class RedisQueryExecutor
         if (string.IsNullOrWhiteSpace(queryText))
         {
             return QueryExecutionResult.Fail("Query is empty.");
+        }
+
+        if (TryParseSelectOrderByLimitOffset(queryText, out var orderByTableName, out var orderByAttribute, out var limit, out var offset))
+        {
+            if (limit < 1)
+            {
+                limit = 1;
+            }
+
+            if (offset < 0)
+            {
+                offset = 0;
+            }
+
+            return await ExecuteSelectWithOrderByAndLimitAsync(
+                orderByTableName,
+                orderByAttribute,
+                limit,
+                offset,
+                selectedDb);
         }
 
         if (TryParseSelectWhereWithComparison(queryText, out var whereTableName, out var whereAttributeName, out var whereOperator, out var whereValue))
@@ -61,7 +85,7 @@ public class RedisQueryExecutor
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
         {
             return QueryExecutionResult.Fail(
-                "Invalid query format. Expected: SELECT * FROM {table_name} or SELECT * FROM {table_name} WHERE {attribute_name} {operator} {value}. Operators: =, >, <, >=, <=");
+                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}]. Operators: =, >, <, >=, <=");
         }
 
         if (pageNumber < 1)
@@ -75,6 +99,40 @@ public class RedisQueryExecutor
         }
 
         return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+    }
+
+    private static bool TryParseSelectOrderByLimitOffset(
+        string queryText,
+        out string tableName,
+        out string orderByAttribute,
+        out int limit,
+        out int offset)
+    {
+        tableName = string.Empty;
+        orderByAttribute = string.Empty;
+        limit = 0;
+        offset = 0;
+
+        var match = SelectOrderByLimitOffsetRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        tableName = match.Groups[1].Value;
+        orderByAttribute = match.Groups[2].Value;
+        
+        if (!int.TryParse(match.Groups[3].Value, out limit) || limit < 1)
+        {
+            return false;
+        }
+
+        if (match.Groups[4].Success && !int.TryParse(match.Groups[4].Value, out offset))
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(tableName) && !string.IsNullOrWhiteSpace(orderByAttribute);
     }
 
     private static bool TryParseSelectWhereWithComparison(
@@ -178,6 +236,88 @@ public class RedisQueryExecutor
             selectedDb);
 
         return await BuildPagedResultAsync(db, resolvedTableName, ids, pageNumber, pageSize);
+    }
+
+    private async Task<QueryExecutionResult> ExecuteSelectWithOrderByAndLimitAsync(
+        string tableName,
+        string orderByAttribute,
+        int limit,
+        int offset,
+        int selectedDb)
+    {
+        var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
+        if (db == null)
+        {
+            return QueryExecutionResult.Fail($"Failed to get Redis database {selectedDb}.");
+        }
+
+        var schemaJson = await GetSchemaJsonAsync(selectedDb);
+        if (string.IsNullOrWhiteSpace(schemaJson))
+        {
+            return QueryExecutionResult.Fail("Schema not found.");
+        }
+
+        // Resolve table and attribute names
+        var resolvedTableName = tableName;
+        var resolvedOrderByAttribute = orderByAttribute;
+
+        var resolvedNames = TryResolveTableAndAttribute(schemaJson, tableName, orderByAttribute);
+        if (!string.IsNullOrWhiteSpace(resolvedNames.resolvedTableName))
+        {
+            resolvedTableName = resolvedNames.resolvedTableName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(resolvedNames.resolvedAttributeName))
+        {
+            resolvedOrderByAttribute = resolvedNames.resolvedAttributeName;
+        }
+
+        // Get primary key attribute
+        var tablePrimaryKeyInfo = TryGetTablePrimaryKeyInfo(schemaJson, resolvedTableName);
+        if (string.IsNullOrWhiteSpace(tablePrimaryKeyInfo.resolvedTableName) ||
+            string.IsNullOrWhiteSpace(tablePrimaryKeyInfo.pkColumn))
+        {
+            return QueryExecutionResult.Fail($"Primary key not found for table '{resolvedTableName}'.");
+        }
+
+        // Load all records and sort them
+        var (ids, sortedRows) = await LoadAndSortRecordsAsync(
+            db,
+            resolvedTableName,
+            tablePrimaryKeyInfo.pkColumn,
+            resolvedOrderByAttribute,
+            selectedDb);
+
+        if (sortedRows.Count == 0)
+        {
+            return QueryExecutionResult.Success(
+                new List<string> { "id" },
+                new List<Dictionary<string, string>>(),
+                0,
+                1,
+                limit);
+        }
+
+        // Apply offset and limit
+        var totalRows = sortedRows.Count;
+        var startIndex = Math.Min(offset, sortedRows.Count);
+        var endIndex = Math.Min(startIndex + limit, sortedRows.Count);
+        var pagedRows = sortedRows.GetRange(startIndex, endIndex - startIndex);
+
+        // Extract column names from first row
+        var columns = new List<string> { "id" };
+        if (pagedRows.Count > 0)
+        {
+            var firstRowKeys = pagedRows[0].Keys.Where(k => k != "id").OrderBy(k => k).ToList();
+            columns.AddRange(firstRowKeys);
+        }
+
+        return QueryExecutionResult.Success(
+            columns,
+            pagedRows,
+            totalRows,
+            1,
+            limit);
     }
 
     private async Task<QueryExecutionResult> BuildPagedResultAsync(
@@ -287,6 +427,66 @@ public class RedisQueryExecutor
         }
 
         return hashes;
+    }
+
+    private async Task<(List<string> ids, List<Dictionary<string, string>> sortedRows)> LoadAndSortRecordsAsync(
+        IDatabase db,
+        string tableName,
+        string pkAttribute,
+        string orderByAttribute,
+        int selectedDb)
+    {
+        // Get all PK IDs
+        var pkSetKey = $"idx:pk:{tableName}:{pkAttribute}";
+        var allPkIds = await db.SetMembersAsync(pkSetKey);
+        var ids = NormalizeIds(allPkIds);
+
+        if (ids.Count == 0)
+        {
+            return (new List<string>(), new List<Dictionary<string, string>>());
+        }
+
+        // Load all hashes with batching
+        var hashes = await LoadHashesByIdsAsync(db, tableName, ids, RedisHashBatchSize);
+
+        // Create rows with sorting information
+        var rowsWithSortKey = new List<(Dictionary<string, string> row, IComparable sortKey)>();
+
+        for (var index = 0; index < ids.Count; index++)
+        {
+            var row = new Dictionary<string, string>(StringComparer.Ordinal) { ["id"] = ids[index] };
+            var sortKeyValue = string.Empty;
+
+            foreach (var entry in hashes[index])
+            {
+                var fieldName = entry.Name.ToString();
+                var fieldValue = entry.Value.ToString();
+                row[fieldName] = fieldValue;
+
+                if (fieldName == orderByAttribute)
+                {
+                    sortKeyValue = fieldValue;
+                }
+            }
+
+            // Try to parse sort key as number for numeric sorting
+            if (decimal.TryParse(sortKeyValue, out var numValue))
+            {
+                rowsWithSortKey.Add((row, numValue));
+            }
+            else
+            {
+                rowsWithSortKey.Add((row, sortKeyValue));
+            }
+        }
+
+        // Sort by the extracted key
+        var sortedRows = rowsWithSortKey
+            .OrderBy(x => x.sortKey)
+            .Select(x => x.row)
+            .ToList();
+
+        return (ids, sortedRows);
     }
 
     private async Task<(string resolvedTableName, List<string> ids)> LoadIdsAsync(
