@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -240,7 +241,7 @@ public class RedisQueryExecutor
 
     private async Task<QueryExecutionResult> ExecuteSelectWithOrderByAndLimitAsync(
         string tableName,
-        string orderByAttribute,
+        string orderByAttributeName,
         int limit,
         int offset,
         int selectedDb)
@@ -254,68 +255,36 @@ public class RedisQueryExecutor
         var schemaJson = await GetSchemaJsonAsync(selectedDb);
         if (string.IsNullOrWhiteSpace(schemaJson))
         {
-            return QueryExecutionResult.Fail("Schema not found.");
+            return QueryExecutionResult.Fail("Schema is not available for ORDER BY query.");
         }
 
-        // Resolve table and attribute names
-        var resolvedTableName = tableName;
-        var resolvedOrderByAttribute = orderByAttribute;
-
-        var resolvedNames = TryResolveTableAndAttribute(schemaJson, tableName, orderByAttribute);
-        if (!string.IsNullOrWhiteSpace(resolvedNames.resolvedTableName))
-        {
-            resolvedTableName = resolvedNames.resolvedTableName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(resolvedNames.resolvedAttributeName))
-        {
-            resolvedOrderByAttribute = resolvedNames.resolvedAttributeName;
-        }
-
-        // Get primary key attribute
-        var tablePrimaryKeyInfo = TryGetTablePrimaryKeyInfo(schemaJson, resolvedTableName);
+        var tablePrimaryKeyInfo = TryGetTablePrimaryKeyInfo(schemaJson, tableName);
         if (string.IsNullOrWhiteSpace(tablePrimaryKeyInfo.resolvedTableName) ||
             string.IsNullOrWhiteSpace(tablePrimaryKeyInfo.pkColumn))
         {
-            return QueryExecutionResult.Fail($"Primary key not found for table '{resolvedTableName}'.");
+            return QueryExecutionResult.Fail($"Primary key for table '{tableName}' was not found in schema.");
         }
 
-        // Load all records and sort them
-        var (ids, sortedRows) = await LoadAndSortRecordsAsync(
+        if (!string.Equals(orderByAttributeName, tablePrimaryKeyInfo.pkColumn, StringComparison.OrdinalIgnoreCase))
+        {
+            return QueryExecutionResult.Fail(
+                $"ORDER BY supports only primary key '{tablePrimaryKeyInfo.pkColumn}' for table '{tablePrimaryKeyInfo.resolvedTableName}'.");
+        }
+
+        var pkSetKey = $"idx:pk:{tablePrimaryKeyInfo.resolvedTableName}:{tablePrimaryKeyInfo.pkColumn}";
+        var ids = await db.SetMembersAsync(pkSetKey);
+
+        var orderedIds = SortValues(NormalizeIds(ids));
+        var slicedIds = orderedIds
+            .Skip(offset)
+            .Take(limit)
+            .ToList();
+
+        return await BuildResultByIdsAsync(
             db,
-            resolvedTableName,
-            tablePrimaryKeyInfo.pkColumn,
-            resolvedOrderByAttribute,
-            selectedDb);
-
-        if (sortedRows.Count == 0)
-        {
-            return QueryExecutionResult.Success(
-                new List<string> { "id" },
-                new List<Dictionary<string, string>>(),
-                0,
-                1,
-                limit);
-        }
-
-        // Apply offset and limit
-        var totalRows = sortedRows.Count;
-        var startIndex = Math.Min(offset, sortedRows.Count);
-        var endIndex = Math.Min(startIndex + limit, sortedRows.Count);
-        var pagedRows = sortedRows.GetRange(startIndex, endIndex - startIndex);
-
-        // Extract column names from first row
-        var columns = new List<string> { "id" };
-        if (pagedRows.Count > 0)
-        {
-            var firstRowKeys = pagedRows[0].Keys.Where(k => k != "id").OrderBy(k => k).ToList();
-            columns.AddRange(firstRowKeys);
-        }
-
-        return QueryExecutionResult.Success(
-            columns,
-            pagedRows,
-            totalRows,
+            tablePrimaryKeyInfo.resolvedTableName,
+            slicedIds,
+            slicedIds.Count,
             1,
             limit);
     }
@@ -427,6 +396,73 @@ public class RedisQueryExecutor
         }
 
         return hashes;
+    }
+
+    private async Task<QueryExecutionResult> BuildResultByIdsAsync(
+        IDatabase db,
+        string resolvedTableName,
+        List<string> ids,
+        int totalRows,
+        int pageNumber,
+        int pageSize)
+    {
+        if (ids.Count == 0)
+        {
+            return QueryExecutionResult.Success(
+                new List<string> { "id" },
+                new List<Dictionary<string, string>>(),
+                totalRows,
+                pageNumber,
+                pageSize);
+        }
+
+        var hashes = await LoadHashesByIdsAsync(db, resolvedTableName, ids, RedisHashBatchSize);
+
+        var fieldNames = new List<string>();
+        var seenFields = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var hash in hashes)
+        {
+            foreach (var entry in hash)
+            {
+                var fieldName = entry.Name.ToString();
+                if (seenFields.Add(fieldName))
+                {
+                    fieldNames.Add(fieldName);
+                }
+            }
+        }
+
+        var columns = new List<string> { "id" };
+        columns.AddRange(fieldNames);
+
+        var rows = new List<Dictionary<string, string>>(ids.Count);
+        for (var index = 0; index < ids.Count; index++)
+        {
+            var row = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["id"] = ids[index]
+            };
+
+            foreach (var fieldName in fieldNames)
+            {
+                row[fieldName] = string.Empty;
+            }
+
+            foreach (var entry in hashes[index])
+            {
+                row[entry.Name.ToString()] = entry.Value.ToString();
+            }
+
+            rows.Add(row);
+        }
+
+        return QueryExecutionResult.Success(
+            columns,
+            rows,
+            totalRows,
+            pageNumber,
+            pageSize);
     }
 
     private async Task<(List<string> ids, List<Dictionary<string, string>> sortedRows)> LoadAndSortRecordsAsync(
@@ -788,6 +824,24 @@ public class RedisQueryExecutor
         {
             return (null, null);
         }
+    }
+
+    private static List<string> SortValues(List<string> values)
+    {
+        return values
+            .OrderBy(value => value, Comparer<string>.Create(CompareIndexValues))
+            .ToList();
+    }
+
+    private static int CompareIndexValues(string left, string right)
+    {
+        if (decimal.TryParse(left, NumberStyles.Any, CultureInfo.InvariantCulture, out var leftNumber) &&
+            decimal.TryParse(right, NumberStyles.Any, CultureInfo.InvariantCulture, out var rightNumber))
+        {
+            return leftNumber.CompareTo(rightNumber);
+        }
+
+        return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsPrimaryKeyAttribute(JsonElement attribute)
