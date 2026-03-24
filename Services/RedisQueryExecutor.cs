@@ -14,6 +14,10 @@ public class RedisQueryExecutor
     private const int RedisHashBatchSize = 200;
     private const int RedisIndexBatchSize = 200;
 
+    private static readonly Regex SelectOrderByLimitOffsetRegex = new(
+        @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+order\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\s+limit\s+(\d+)\s+offset\s+(\d+)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex SelectWhereConditionFromTableRegex = new(
         @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|=|>|<)\s*(.+?)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -36,6 +40,21 @@ public class RedisQueryExecutor
         if (string.IsNullOrWhiteSpace(queryText))
         {
             return QueryExecutionResult.Fail("Query is empty.");
+        }
+
+        if (TryParseSelectOrderByLimitOffset(
+            queryText,
+            out var orderedTableName,
+            out var orderByAttributeName,
+            out var limit,
+            out var offset))
+        {
+            return await ExecuteSelectOrderByLimitOffsetAsync(
+            orderedTableName,
+            orderByAttributeName,
+            limit,
+            offset,
+            selectedDb);
         }
 
         if (TryParseSelectWhereConditionFromTable(
@@ -68,7 +87,7 @@ public class RedisQueryExecutor
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
         {
             return QueryExecutionResult.Fail(
-                "Invalid query format. Expected: SELECT * FROM {table_name} or SELECT * FROM {table_name} WHERE {attribute_name} {=|>|<|>=|<=} {value}");
+                "Invalid query format. Expected: SELECT * FROM {table_name}, SELECT * FROM {table_name} WHERE {attribute_name} {=|>|<|>=|<=} {value}, or SELECT * FROM {table_name} ORDER BY {pk_attribute} LIMIT {n} OFFSET {m}");
         }
 
         if (pageNumber < 1)
@@ -82,6 +101,43 @@ public class RedisQueryExecutor
         }
 
         return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+    }
+
+    private static bool TryParseSelectOrderByLimitOffset(
+        string queryText,
+        out string tableName,
+        out string orderByAttributeName,
+        out int limit,
+        out int offset)
+    {
+        tableName = string.Empty;
+        orderByAttributeName = string.Empty;
+        limit = 0;
+        offset = 0;
+
+        var match = SelectOrderByLimitOffsetRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        tableName = match.Groups[1].Value;
+        orderByAttributeName = match.Groups[2].Value;
+
+        if (!int.TryParse(match.Groups[3].Value, out limit))
+        {
+            return false;
+        }
+
+        if (!int.TryParse(match.Groups[4].Value, out offset))
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(tableName)
+               && !string.IsNullOrWhiteSpace(orderByAttributeName)
+               && limit > 0
+               && offset >= 0;
     }
 
     private static bool TryParseSelectWhereConditionFromTable(
@@ -161,6 +217,56 @@ public class RedisQueryExecutor
         return await BuildPagedResultAsync(db, resolvedTableName, ids, pageNumber, pageSize);
     }
 
+    private async Task<QueryExecutionResult> ExecuteSelectOrderByLimitOffsetAsync(
+        string tableName,
+        string orderByAttributeName,
+        int limit,
+        int offset,
+        int selectedDb)
+    {
+        var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
+        if (db == null)
+        {
+            return QueryExecutionResult.Fail($"Failed to get Redis database {selectedDb}.");
+        }
+
+        var schemaJson = await GetSchemaJsonAsync(selectedDb);
+        if (string.IsNullOrWhiteSpace(schemaJson))
+        {
+            return QueryExecutionResult.Fail("Schema is not available for ORDER BY query.");
+        }
+
+        var tablePrimaryKeyInfo = TryGetTablePrimaryKeyInfo(schemaJson, tableName);
+        if (string.IsNullOrWhiteSpace(tablePrimaryKeyInfo.resolvedTableName) ||
+            string.IsNullOrWhiteSpace(tablePrimaryKeyInfo.pkColumn))
+        {
+            return QueryExecutionResult.Fail($"Primary key for table '{tableName}' was not found in schema.");
+        }
+
+        if (!string.Equals(orderByAttributeName, tablePrimaryKeyInfo.pkColumn, StringComparison.OrdinalIgnoreCase))
+        {
+            return QueryExecutionResult.Fail(
+                $"ORDER BY supports only primary key '{tablePrimaryKeyInfo.pkColumn}' for table '{tablePrimaryKeyInfo.resolvedTableName}'.");
+        }
+
+        var pkSetKey = $"idx:pk:{tablePrimaryKeyInfo.resolvedTableName}:{tablePrimaryKeyInfo.pkColumn}";
+        var ids = await db.SetMembersAsync(pkSetKey);
+
+        var orderedIds = SortValues(NormalizeIds(ids));
+        var slicedIds = orderedIds
+            .Skip(offset)
+            .Take(limit)
+            .ToList();
+
+        return await BuildResultByIdsAsync(
+            db,
+            tablePrimaryKeyInfo.resolvedTableName,
+            slicedIds,
+            slicedIds.Count,
+            1,
+            limit);
+    }
+
     private async Task<QueryExecutionResult> ExecuteSelectWhereFromTableAsync(
         string tableName,
         string attributeName,
@@ -229,7 +335,34 @@ public class RedisQueryExecutor
             .Take(pageSize)
             .ToList();
 
-        var hashes = await LoadHashesByIdsAsync(db, resolvedTableName, pagedIds, RedisHashBatchSize);
+        return await BuildResultByIdsAsync(
+            db,
+            resolvedTableName,
+            pagedIds,
+            totalRows,
+            normalizedPageNumber,
+            pageSize);
+    }
+
+    private async Task<QueryExecutionResult> BuildResultByIdsAsync(
+        IDatabase db,
+        string resolvedTableName,
+        List<string> ids,
+        int totalRows,
+        int pageNumber,
+        int pageSize)
+    {
+        if (ids.Count == 0)
+        {
+            return QueryExecutionResult.Success(
+                new List<string> { "id" },
+                new List<Dictionary<string, string>>(),
+                totalRows,
+                pageNumber,
+                pageSize);
+        }
+
+        var hashes = await LoadHashesByIdsAsync(db, resolvedTableName, ids, RedisHashBatchSize);
 
         var fieldNames = new List<string>();
         var seenFields = new HashSet<string>(StringComparer.Ordinal);
@@ -249,12 +382,12 @@ public class RedisQueryExecutor
         var columns = new List<string> { "id" };
         columns.AddRange(fieldNames);
 
-        var rows = new List<Dictionary<string, string>>(pagedIds.Count);
-        for (var index = 0; index < pagedIds.Count; index++)
+        var rows = new List<Dictionary<string, string>>(ids.Count);
+        for (var index = 0; index < ids.Count; index++)
         {
             var row = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["id"] = pagedIds[index]
+                ["id"] = ids[index]
             };
 
             foreach (var fieldName in fieldNames)
@@ -274,7 +407,7 @@ public class RedisQueryExecutor
             columns,
             rows,
             totalRows,
-            normalizedPageNumber,
+            pageNumber,
             pageSize);
     }
 
@@ -536,6 +669,13 @@ public class RedisQueryExecutor
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static List<string> SortValues(List<string> values)
+    {
+        return values
+            .OrderBy(value => value, Comparer<string>.Create(CompareIndexValues))
             .ToList();
     }
 
