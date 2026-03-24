@@ -36,7 +36,7 @@
 					<TextBox x:Name="QueryInput"
 							 Grid.Column="0"
 							 Text="{Binding QueryText, Mode=TwoWay}"
-							 Watermark="Enter query (for example: SELECT * FROM users WHERE Status = Active)"
+							 Watermark="Enter query (for example: SELECT oi.Product_id, oi.Quantity, p.Title, p.Price FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id WHERE oi.Order_id = 1)"
 							 Height="38"
 							 Background="#2c3e50"
 							 Foreground="#ecf0f1"
