@@ -13,6 +13,10 @@ public class RedisQueryExecutor
 {
     private const int RedisHashBatchSize = 200;
 
+    private static readonly Regex SelectJoinWithWhereRegex = new(
+        @"^\s*select\s+([A-Za-z_][A-Za-z0-9_]*)\.\*\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex SelectOrderByLimitOffsetRegex = new(
         @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+order\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\s+limit\s+(\d+)(?:\s+offset\s+(\d+))?\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -39,6 +43,21 @@ public class RedisQueryExecutor
         if (string.IsNullOrWhiteSpace(queryText))
         {
             return QueryExecutionResult.Fail("Query is empty.");
+        }
+
+        if (TryParseSelectJoinWithWhere(queryText, out var joinQuery))
+        {
+            if (pageNumber < 1)
+            {
+                pageNumber = 1;
+            }
+
+            if (pageSize < 1)
+            {
+                pageSize = 1;
+            }
+
+            return await ExecuteSelectJoinWithWhereAsync(joinQuery, selectedDb, pageNumber, pageSize);
         }
 
         if (TryParseSelectOrderByLimitOffset(queryText, out var orderByTableName, out var orderByAttribute, out var limit, out var offset))
@@ -86,7 +105,7 @@ public class RedisQueryExecutor
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
         {
             return QueryExecutionResult.Fail(
-                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}]. Operators: =, >, <, >=, <=");
+                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1. Operators: =, >, <, >=, <=");
         }
 
         if (pageNumber < 1)
@@ -100,6 +119,82 @@ public class RedisQueryExecutor
         }
 
         return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+    }
+
+    private static bool TryParseSelectJoinWithWhere(string queryText, out JoinQueryModel query)
+    {
+        query = new JoinQueryModel();
+
+        var match = SelectJoinWithWhereRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var selectLeftAlias = match.Groups[1].Value;
+        var selectRightAlias = match.Groups[2].Value;
+        var selectRightAttribute = match.Groups[3].Value;
+
+        var leftTable = match.Groups[4].Value;
+        var leftAlias = match.Groups[5].Value;
+        var rightTable = match.Groups[6].Value;
+        var rightAlias = match.Groups[7].Value;
+
+        var onLeftAlias = match.Groups[8].Value;
+        var onLeftAttribute = match.Groups[9].Value;
+        var onRightAlias = match.Groups[10].Value;
+        var onRightAttribute = match.Groups[11].Value;
+
+        var whereAlias = match.Groups[12].Value;
+        var whereAttribute = match.Groups[13].Value;
+        var whereValue = NormalizeWhereValue(match.Groups[14].Value);
+
+        if (!string.Equals(selectLeftAlias, leftAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(selectRightAlias, rightAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(whereAlias, rightAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string leftJoinAttribute;
+        string rightJoinAttribute;
+
+        if (string.Equals(onLeftAlias, rightAlias, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(onRightAlias, leftAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            rightJoinAttribute = onLeftAttribute;
+            leftJoinAttribute = onRightAttribute;
+        }
+        else if (string.Equals(onLeftAlias, leftAlias, StringComparison.OrdinalIgnoreCase) &&
+                 string.Equals(onRightAlias, rightAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            leftJoinAttribute = onLeftAttribute;
+            rightJoinAttribute = onRightAttribute;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(whereValue))
+        {
+            return false;
+        }
+
+        query = new JoinQueryModel
+        {
+            LeftTable = leftTable,
+            LeftAlias = leftAlias,
+            LeftJoinAttribute = leftJoinAttribute,
+            RightTable = rightTable,
+            RightAlias = rightAlias,
+            RightJoinAttribute = rightJoinAttribute,
+            RightSelectedAttribute = selectRightAttribute,
+            WhereRightAttribute = whereAttribute,
+            WhereValue = whereValue
+        };
+
+        return true;
     }
 
     private static bool TryParseSelectOrderByLimitOffset(
@@ -237,6 +332,111 @@ public class RedisQueryExecutor
             selectedDb);
 
         return await BuildPagedResultAsync(db, resolvedTableName, ids, pageNumber, pageSize);
+    }
+
+    private async Task<QueryExecutionResult> ExecuteSelectJoinWithWhereAsync(
+        JoinQueryModel query,
+        int selectedDb,
+        int pageNumber,
+        int pageSize)
+    {
+        var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
+        if (db == null)
+        {
+            return QueryExecutionResult.Fail($"Failed to get Redis database {selectedDb}.");
+        }
+
+        var schemaJson = await GetSchemaJsonAsync(selectedDb);
+
+        var resolvedLeft = string.IsNullOrWhiteSpace(schemaJson)
+            ? (resolvedTableName: query.LeftTable, resolvedAttributeName: query.LeftJoinAttribute)
+            : TryResolveTableAndAttribute(schemaJson, query.LeftTable, query.LeftJoinAttribute);
+
+        var resolvedRightJoin = string.IsNullOrWhiteSpace(schemaJson)
+            ? (resolvedTableName: query.RightTable, resolvedAttributeName: query.RightJoinAttribute)
+            : TryResolveTableAndAttribute(schemaJson, query.RightTable, query.RightJoinAttribute);
+
+        var resolvedRightSelect = string.IsNullOrWhiteSpace(schemaJson)
+            ? (resolvedTableName: query.RightTable, resolvedAttributeName: query.RightSelectedAttribute)
+            : TryResolveTableAndAttribute(schemaJson, query.RightTable, query.RightSelectedAttribute);
+
+        var resolvedRightWhere = string.IsNullOrWhiteSpace(schemaJson)
+            ? (resolvedTableName: query.RightTable, resolvedAttributeName: query.WhereRightAttribute)
+            : TryResolveTableAndAttribute(schemaJson, query.RightTable, query.WhereRightAttribute);
+
+        var resolvedLeftTableName = resolvedLeft.resolvedTableName ?? query.LeftTable;
+        var resolvedLeftJoinAttribute = resolvedLeft.resolvedAttributeName ?? query.LeftJoinAttribute;
+        var resolvedRightTableName = resolvedRightJoin.resolvedTableName ?? query.RightTable;
+        var resolvedRightJoinAttribute = resolvedRightJoin.resolvedAttributeName ?? query.RightJoinAttribute;
+        var resolvedRightSelectAttribute = resolvedRightSelect.resolvedAttributeName ?? query.RightSelectedAttribute;
+        var resolvedRightWhereAttribute = resolvedRightWhere.resolvedAttributeName ?? query.WhereRightAttribute;
+
+        if (!string.Equals(resolvedRightJoinAttribute, resolvedRightWhereAttribute, StringComparison.OrdinalIgnoreCase))
+        {
+            return QueryExecutionResult.Fail(
+                $"JOIN query expects WHERE on join attribute '{resolvedRightJoinAttribute}'.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(schemaJson))
+        {
+            var rightPkInfo = TryGetTablePrimaryKeyInfo(schemaJson, resolvedRightTableName);
+            if (string.IsNullOrWhiteSpace(rightPkInfo.pkColumn))
+            {
+                return QueryExecutionResult.Fail($"Primary key for table '{resolvedRightTableName}' was not found in schema.");
+            }
+
+            if (!string.Equals(rightPkInfo.pkColumn, resolvedRightJoinAttribute, StringComparison.OrdinalIgnoreCase))
+            {
+                return QueryExecutionResult.Fail(
+                    $"JOIN query expects right join attribute to be PK '{rightPkInfo.pkColumn}' for table '{resolvedRightTableName}'.");
+            }
+        }
+
+        var indexSetKey = $"idx:{resolvedLeftTableName}:{resolvedLeftJoinAttribute}:{query.WhereValue}";
+        var matchedIds = NormalizeIds(await db.SetMembersAsync(indexSetKey));
+
+        var totalRows = matchedIds.Count;
+        if (totalRows == 0)
+        {
+            return QueryExecutionResult.Success(
+                new List<string> { "id", $"{query.RightAlias}.{resolvedRightSelectAttribute}" },
+                new List<Dictionary<string, string>>(),
+                0,
+                1,
+                pageSize);
+        }
+
+        var totalPages = (int)Math.Ceiling(totalRows / (double)pageSize);
+        var normalizedPage = Math.Clamp(pageNumber, 1, totalPages);
+
+        var pagedIds = matchedIds
+            .Skip((normalizedPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+
+        var rightKey = $"{resolvedRightTableName}:{query.WhereValue}";
+        var rightHash = await db.HashGetAllAsync(rightKey);
+
+        var rightSelectedValue = string.Empty;
+        foreach (var entry in rightHash)
+        {
+            if (string.Equals(entry.Name.ToString(), resolvedRightSelectAttribute, StringComparison.OrdinalIgnoreCase))
+            {
+                rightSelectedValue = entry.Value.ToString();
+                break;
+            }
+        }
+
+        var joinColumnName = $"{query.RightAlias}.{resolvedRightSelectAttribute}";
+        return await BuildResultByIdsWithExtraColumnAsync(
+            db,
+            resolvedLeftTableName,
+            pagedIds,
+            totalRows,
+            normalizedPage,
+            pageSize,
+            joinColumnName,
+            rightSelectedValue);
     }
 
     private async Task<QueryExecutionResult> ExecuteSelectWithOrderByAndLimitAsync(
@@ -442,6 +642,77 @@ public class RedisQueryExecutor
             var row = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["id"] = ids[index]
+            };
+
+            foreach (var fieldName in fieldNames)
+            {
+                row[fieldName] = string.Empty;
+            }
+
+            foreach (var entry in hashes[index])
+            {
+                row[entry.Name.ToString()] = entry.Value.ToString();
+            }
+
+            rows.Add(row);
+        }
+
+        return QueryExecutionResult.Success(
+            columns,
+            rows,
+            totalRows,
+            pageNumber,
+            pageSize);
+    }
+
+    private async Task<QueryExecutionResult> BuildResultByIdsWithExtraColumnAsync(
+        IDatabase db,
+        string resolvedTableName,
+        List<string> ids,
+        int totalRows,
+        int pageNumber,
+        int pageSize,
+        string extraColumnName,
+        string extraColumnValue)
+    {
+        if (ids.Count == 0)
+        {
+            return QueryExecutionResult.Success(
+                new List<string> { "id", extraColumnName },
+                new List<Dictionary<string, string>>(),
+                totalRows,
+                pageNumber,
+                pageSize);
+        }
+
+        var hashes = await LoadHashesByIdsAsync(db, resolvedTableName, ids, RedisHashBatchSize);
+
+        var fieldNames = new List<string>();
+        var seenFields = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var hash in hashes)
+        {
+            foreach (var entry in hash)
+            {
+                var fieldName = entry.Name.ToString();
+                if (seenFields.Add(fieldName))
+                {
+                    fieldNames.Add(fieldName);
+                }
+            }
+        }
+
+        var columns = new List<string> { "id" };
+        columns.AddRange(fieldNames);
+        columns.Add(extraColumnName);
+
+        var rows = new List<Dictionary<string, string>>(ids.Count);
+        for (var index = 0; index < ids.Count; index++)
+        {
+            var row = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["id"] = ids[index],
+                [extraColumnName] = extraColumnValue
             };
 
             foreach (var fieldName in fieldNames)
@@ -877,6 +1148,19 @@ public class RedisQueryExecutor
         }
 
         return false;
+    }
+
+    private sealed class JoinQueryModel
+    {
+        public string LeftTable { get; init; } = string.Empty;
+        public string LeftAlias { get; init; } = string.Empty;
+        public string LeftJoinAttribute { get; init; } = string.Empty;
+        public string RightTable { get; init; } = string.Empty;
+        public string RightAlias { get; init; } = string.Empty;
+        public string RightJoinAttribute { get; init; } = string.Empty;
+        public string RightSelectedAttribute { get; init; } = string.Empty;
+        public string WhereRightAttribute { get; init; } = string.Empty;
+        public string WhereValue { get; init; } = string.Empty;
     }
 }
 
