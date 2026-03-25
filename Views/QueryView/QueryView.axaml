@@ -36,7 +36,7 @@
 					<TextBox x:Name="QueryInput"
 							 Grid.Column="0"
 							 Text="{Binding QueryText, Mode=TwoWay}"
-							 Watermark="Enter query (for example: SELECT p.Seller_id, COUNT(*) AS items, SUM(oi.Quantity) AS qty FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id GROUP BY p.Seller_id ORDER BY qty DESC LIMIT 20)"
+							 Watermark="Enter query (for example: SELECT pc.Category_id, COUNT(*) cnt FROM Product_Categories pc GROUP BY pc.Category_id ORDER BY cnt DESC LIMIT 10)"
 							 Height="38"
 							 Background="#2c3e50"
 							 Foreground="#ecf0f1"

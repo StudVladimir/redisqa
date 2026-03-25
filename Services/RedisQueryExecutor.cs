@@ -13,6 +13,10 @@ public class RedisQueryExecutor
 {
     private const int RedisHashBatchSize = 200;
 
+    private static readonly Regex SelectGroupByCountRegex = new(
+        @"^\s*select\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*count\(\*\)\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+group\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+order\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\s+(asc|desc)\s+limit\s+(\d+)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex SelectGroupByAggregateJoinRegex = new(
         @"^\s*select\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*count\(\*\)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*,\s*sum\(\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+group\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+order\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\s+(asc|desc)\s+limit\s+(\d+)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -55,6 +59,11 @@ public class RedisQueryExecutor
         if (string.IsNullOrWhiteSpace(queryText))
         {
             return QueryExecutionResult.Fail("Query is empty.");
+        }
+
+        if (TryParseSelectGroupByCount(queryText, out var groupByCountQuery))
+        {
+            return await ExecuteSelectGroupByCountAsync(groupByCountQuery, selectedDb);
         }
 
         if (TryParseSelectGroupByAggregateJoin(queryText, out var aggregateQuery))
@@ -152,7 +161,7 @@ public class RedisQueryExecutor
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
         {
             return QueryExecutionResult.Fail(
-                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | Single JOIN: SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | Double JOIN: SELECT o.idOrder, oi.Product_id, p.Title FROM Orders o JOIN Order_Items oi ON oi.Order_id = o.idOrder JOIN Products p ON p.idProduct = oi.Product_id WHERE o.Users_id = 1 | Aggregate JOIN: SELECT p.Seller_id, COUNT(*) AS items, SUM(oi.Quantity) AS qty FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id GROUP BY p.Seller_id ORDER BY qty DESC LIMIT 20. Operators: =, >, <, >=, <=");
+                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | GROUP BY: SELECT pc.Category_id, COUNT(*) cnt FROM Product_Categories pc GROUP BY pc.Category_id ORDER BY cnt DESC LIMIT 10 | Single JOIN: SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | Double JOIN: SELECT o.idOrder, oi.Product_id, p.Title FROM Orders o JOIN Order_Items oi ON oi.Order_id = o.idOrder JOIN Products p ON p.idProduct = oi.Product_id WHERE o.Users_id = 1 | Aggregate JOIN: SELECT p.Seller_id, COUNT(*) AS items, SUM(oi.Quantity) AS qty FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id GROUP BY p.Seller_id ORDER BY qty DESC LIMIT 20. Operators: =, >, <, >=, <=");
         }
 
         if (pageNumber < 1)
@@ -166,6 +175,52 @@ public class RedisQueryExecutor
         }
 
         return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+    }
+
+    private static bool TryParseSelectGroupByCount(string queryText, out GroupByCountQueryModel query)
+    {
+        query = new GroupByCountQueryModel();
+
+        var match = SelectGroupByCountRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var selectedAlias = match.Groups[1].Value;
+        var selectedAttribute = match.Groups[2].Value;
+        var countAlias = match.Groups[3].Value;
+        var tableName = match.Groups[4].Value;
+        var tableAlias = match.Groups[5].Value;
+        var groupByAlias = match.Groups[6].Value;
+        var groupByAttribute = match.Groups[7].Value;
+        var orderByAlias = match.Groups[8].Value;
+        var orderDirection = match.Groups[9].Value;
+
+        if (!int.TryParse(match.Groups[10].Value, out var limit) || limit < 1)
+        {
+            return false;
+        }
+
+        if (!string.Equals(selectedAlias, tableAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(groupByAlias, tableAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(selectedAttribute, groupByAttribute, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(orderByAlias, countAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        query = new GroupByCountQueryModel
+        {
+            TableName = tableName,
+            TableAlias = tableAlias,
+            GroupByAttribute = groupByAttribute,
+            CountAlias = countAlias,
+            OrderDirection = orderDirection,
+            Limit = limit
+        };
+
+        return true;
     }
 
     private static bool TryParseSelectGroupByAggregateJoin(string queryText, out AggregateJoinQueryModel query)
@@ -937,6 +992,82 @@ public class RedisQueryExecutor
             columns,
             rows,
             groups.Count,
+            1,
+            query.Limit);
+    }
+
+    private async Task<QueryExecutionResult> ExecuteSelectGroupByCountAsync(
+        GroupByCountQueryModel query,
+        int selectedDb)
+    {
+        var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
+        if (db == null)
+        {
+            return QueryExecutionResult.Fail($"Failed to get Redis database {selectedDb}.");
+        }
+
+        var schemaJson = await GetSchemaJsonAsync(selectedDb);
+        var resolvedGroupBy = ResolveNames(schemaJson, query.TableName, query.GroupByAttribute);
+
+        var resolvedTableName = resolvedGroupBy.resolvedTableName;
+        var resolvedGroupByAttribute = resolvedGroupBy.resolvedAttributeName;
+
+        var (_, ids) = await LoadIdsAsync(db, resolvedTableName, selectedDb);
+        if (ids.Count == 0)
+        {
+            return QueryExecutionResult.Success(
+                new List<string> { $"{query.TableAlias}.{resolvedGroupByAttribute}", query.CountAlias },
+                new List<Dictionary<string, string>>(),
+                0,
+                1,
+                query.Limit);
+        }
+
+        var hashes = await LoadHashesByIdsAsync(db, resolvedTableName, ids, RedisHashBatchSize);
+
+        var groupedCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var hash in hashes)
+        {
+            var row = ToDictionary(hash);
+            var groupKey = GetColumnValue(row, resolvedGroupByAttribute);
+            if (string.IsNullOrWhiteSpace(groupKey))
+            {
+                continue;
+            }
+
+            groupedCounts[groupKey] = groupedCounts.TryGetValue(groupKey, out var current)
+                ? current + 1
+                : 1;
+        }
+
+        var orderedGroups = string.Equals(query.OrderDirection, "asc", StringComparison.OrdinalIgnoreCase)
+            ? groupedCounts.OrderBy(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            : groupedCounts.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal);
+
+        var selectedGroups = orderedGroups
+            .Take(query.Limit)
+            .ToList();
+
+        var columns = new List<string>
+        {
+            $"{query.TableAlias}.{resolvedGroupByAttribute}",
+            query.CountAlias
+        };
+
+        var rows = new List<Dictionary<string, string>>(selectedGroups.Count);
+        foreach (var group in selectedGroups)
+        {
+            rows.Add(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [columns[0]] = group.Key,
+                [columns[1]] = group.Value.ToString(CultureInfo.InvariantCulture)
+            });
+        }
+
+        return QueryExecutionResult.Success(
+            columns,
+            rows,
+            groupedCounts.Count,
             1,
             query.Limit);
     }
@@ -2022,6 +2153,16 @@ public class RedisQueryExecutor
         public string WhereAttribute { get; init; } = string.Empty;
         public string WhereValue { get; init; } = string.Empty;
         public Dictionary<string, List<string>> SelectedColumns { get; init; } = new();
+    }
+
+    private sealed class GroupByCountQueryModel
+    {
+        public string TableName { get; init; } = string.Empty;
+        public string TableAlias { get; init; } = string.Empty;
+        public string GroupByAttribute { get; init; } = string.Empty;
+        public string CountAlias { get; init; } = string.Empty;
+        public string OrderDirection { get; init; } = string.Empty;
+        public int Limit { get; init; }
     }
 
     private sealed class AggregateJoinQueryModel
