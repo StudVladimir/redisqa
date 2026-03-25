@@ -1754,6 +1754,21 @@ public class RedisQueryExecutor
         // For exact match (=), use the single key lookup
         if (op == "=")
         {
+            if (!string.IsNullOrWhiteSpace(schemaJson))
+            {
+                var primaryKeyInfo = TryGetTablePrimaryKeyInfo(schemaJson, resolvedTableName);
+                if (!string.IsNullOrWhiteSpace(primaryKeyInfo.pkColumn) &&
+                    string.Equals(primaryKeyInfo.pkColumn, resolvedAttributeName, StringComparison.OrdinalIgnoreCase))
+                {
+                    var directHashKey = $"{resolvedTableName}:{value}";
+                    var exists = await db.KeyExistsAsync(directHashKey);
+
+                    return exists
+                        ? (resolvedTableName, new List<string> { value })
+                        : (resolvedTableName, new List<string>());
+                }
+            }
+
             var indexSetKey = $"idx:{resolvedTableName}:{resolvedAttributeName}:{value}";
             var ids = await db.SetMembersAsync(indexSetKey);
             return (resolvedTableName, NormalizeIds(ids));
