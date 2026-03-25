@@ -38,7 +38,7 @@ public class RedisQueryExecutor
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex SelectWhereWithComparisonRegex = new(
-        @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|>|<|=)\s*(.+?)\s*;?\s*$",
+        @"^\s*select\s+\*\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|>|<|=)\s*(.+?)(?:\s+limit\s+(\d+))?\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex SelectAllFromTableRegex = new(
@@ -136,9 +136,17 @@ public class RedisQueryExecutor
                 selectedDb);
         }
 
-        if (TryParseSelectWhereWithComparison(queryText, out var whereTableName, out var whereAttributeName, out var whereOperator, out var whereValue))
+        if (TryParseSelectWhereWithComparison(queryText, out var whereTableName, out var whereAttributeName, out var whereOperator, out var whereValue, out var whereLimit))
         {
-            if (pageNumber < 1)
+            int? fetchLimit = null;
+
+            if (whereLimit.HasValue)
+            {
+                pageNumber = 1;
+                pageSize = whereLimit.Value;
+                fetchLimit = whereLimit.Value;
+            }
+            else if (pageNumber < 1)
             {
                 pageNumber = 1;
             }
@@ -155,7 +163,8 @@ public class RedisQueryExecutor
                 whereValue,
                 selectedDb,
                 pageNumber,
-                pageSize);
+                pageSize,
+                fetchLimit);
         }
 
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
@@ -645,12 +654,14 @@ public class RedisQueryExecutor
         out string tableName,
         out string attributeName,
         out string op,
-        out string value)
+        out string value,
+        out int? limit)
     {
         tableName = string.Empty;
         attributeName = string.Empty;
         op = string.Empty;
         value = string.Empty;
+        limit = null;
 
         var match = SelectWhereWithComparisonRegex.Match(queryText);
         if (!match.Success)
@@ -662,6 +673,16 @@ public class RedisQueryExecutor
         attributeName = match.Groups[2].Value;
         op = match.Groups[3].Value;
         value = NormalizeWhereValue(match.Groups[4].Value);
+
+        if (match.Groups[5].Success)
+        {
+            if (!int.TryParse(match.Groups[5].Value, out var parsedLimit) || parsedLimit < 1)
+            {
+                return false;
+            }
+
+            limit = parsedLimit;
+        }
 
         return !string.IsNullOrWhiteSpace(tableName)
                && !string.IsNullOrWhiteSpace(attributeName)
@@ -724,7 +745,8 @@ public class RedisQueryExecutor
         string value,
         int selectedDb,
         int pageNumber,
-        int pageSize)
+        int pageSize,
+        int? fetchLimit = null)
     {
         var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
         if (db == null)
@@ -738,7 +760,8 @@ public class RedisQueryExecutor
             attributeName,
             op,
             value,
-            selectedDb);
+            selectedDb,
+            fetchLimit);
 
         return await BuildPagedResultAsync(db, resolvedTableName, ids, pageNumber, pageSize);
     }
@@ -1731,7 +1754,8 @@ public class RedisQueryExecutor
         string attributeName,
         string op,
         string value,
-        int selectedDb)
+        int selectedDb,
+        int? maxIds = null)
     {
         var resolvedTableName = tableName;
         var resolvedAttributeName = attributeName;
@@ -1770,21 +1794,31 @@ public class RedisQueryExecutor
             }
 
             var indexSetKey = $"idx:{resolvedTableName}:{resolvedAttributeName}:{value}";
-            var ids = await db.SetMembersAsync(indexSetKey);
-            return (resolvedTableName, NormalizeIds(ids));
+            if (maxIds.HasValue)
+            {
+                var limitedIds = db.SetScan(indexSetKey, pageSize: Math.Min(1000, Math.Max(1, maxIds.Value)))
+                    .Take(maxIds.Value)
+                    .ToArray();
+
+                return (resolvedTableName, NormalizeIds(limitedIds));
+            }
+
+            var allIds = await db.SetMembersAsync(indexSetKey);
+            return (resolvedTableName, NormalizeIds(allIds));
         }
 
         // For comparison operators (>=, <=, >, <), scan all matching keys
-        var matchingIds = await LoadIdsByComparisonAsync(db, resolvedTableName, resolvedAttributeName, op, value);
+        var matchingIds = LoadIdsByComparisonAsync(db, resolvedTableName, resolvedAttributeName, op, value, maxIds);
         return (resolvedTableName, matchingIds);
     }
 
-    private async Task<List<string>> LoadIdsByComparisonAsync(
+    private List<string> LoadIdsByComparisonAsync(
         IDatabase db,
         string tableName,
         string attributeName,
         string op,
-        string compareValue)
+        string compareValue,
+        int? maxIds = null)
     {
         var indexKeyPrefix = $"idx:{tableName}:{attributeName}:";
         var connection = RedisConnectionService.Instance.GetConnection();
@@ -1818,13 +1852,23 @@ public class RedisQueryExecutor
                 if (MatchesComparison(valuePart, op, compareValue))
                 {
                     // Get all IDs from this set
-                    var setMembers = await db.SetMembersAsync(key);
-                    foreach (var member in setMembers)
+                    var pageSize = maxIds.HasValue
+                        ? Math.Min(1000, Math.Max(1, maxIds.Value))
+                        : 1000;
+
+                    foreach (var member in db.SetScan(key, pageSize: pageSize))
                     {
                         var id = member.ToString();
                         if (!string.IsNullOrWhiteSpace(id))
                         {
                             allIds.Add(id);
+
+                            if (maxIds.HasValue && allIds.Count >= maxIds.Value)
+                            {
+                                return allIds
+                                    .OrderBy(foundId => foundId, StringComparer.Ordinal)
+                                    .ToList();
+                            }
                         }
                     }
                 }
