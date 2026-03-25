@@ -13,6 +13,10 @@ public class RedisQueryExecutor
 {
     private const int RedisHashBatchSize = 200;
 
+    private static readonly Regex SelectGroupByAggregateJoinRegex = new(
+        @"^\s*select\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*count\(\*\)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*,\s*sum\(\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+group\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+order\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\s+(asc|desc)\s+limit\s+(\d+)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex SelectDoubleJoinWhereRegex = new(
         @"^\s*select\s+(.+?)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -51,6 +55,11 @@ public class RedisQueryExecutor
         if (string.IsNullOrWhiteSpace(queryText))
         {
             return QueryExecutionResult.Fail("Query is empty.");
+        }
+
+        if (TryParseSelectGroupByAggregateJoin(queryText, out var aggregateQuery))
+        {
+            return await ExecuteSelectGroupByAggregateJoinAsync(aggregateQuery, selectedDb);
         }
 
         if (TryParseSelectDoubleJoinWhere(queryText, out var doubleJoinQuery))
@@ -143,7 +152,7 @@ public class RedisQueryExecutor
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
         {
             return QueryExecutionResult.Fail(
-                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | Single JOIN: SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | Double JOIN: SELECT o.idOrder, oi.Product_id, p.Title FROM Orders o JOIN Order_Items oi ON oi.Order_id = o.idOrder JOIN Products p ON p.idProduct = oi.Product_id WHERE o.Users_id = 1. Operators: =, >, <, >=, <=");
+                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | Single JOIN: SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | Double JOIN: SELECT o.idOrder, oi.Product_id, p.Title FROM Orders o JOIN Order_Items oi ON oi.Order_id = o.idOrder JOIN Products p ON p.idProduct = oi.Product_id WHERE o.Users_id = 1 | Aggregate JOIN: SELECT p.Seller_id, COUNT(*) AS items, SUM(oi.Quantity) AS qty FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id GROUP BY p.Seller_id ORDER BY qty DESC LIMIT 20. Operators: =, >, <, >=, <=");
         }
 
         if (pageNumber < 1)
@@ -157,6 +166,91 @@ public class RedisQueryExecutor
         }
 
         return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+    }
+
+    private static bool TryParseSelectGroupByAggregateJoin(string queryText, out AggregateJoinQueryModel query)
+    {
+        query = new AggregateJoinQueryModel();
+
+        var match = SelectGroupByAggregateJoinRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var selectedAlias = match.Groups[1].Value;
+        var selectedGroupByAttribute = match.Groups[2].Value;
+        var countAlias = match.Groups[3].Value;
+        var sumSourceAlias = match.Groups[4].Value;
+        var sumSourceAttribute = match.Groups[5].Value;
+        var sumAlias = match.Groups[6].Value;
+
+        var leftTable = match.Groups[7].Value;
+        var leftAlias = match.Groups[8].Value;
+        var rightTable = match.Groups[9].Value;
+        var rightAlias = match.Groups[10].Value;
+
+        var onLeftAlias = match.Groups[11].Value;
+        var onLeftAttribute = match.Groups[12].Value;
+        var onRightAlias = match.Groups[13].Value;
+        var onRightAttribute = match.Groups[14].Value;
+
+        var groupByAlias = match.Groups[15].Value;
+        var groupByAttribute = match.Groups[16].Value;
+        var orderByAlias = match.Groups[17].Value;
+        var orderDirection = match.Groups[18].Value;
+
+        if (!int.TryParse(match.Groups[19].Value, out var limit) || limit < 1)
+        {
+            return false;
+        }
+
+        if (!string.Equals(selectedAlias, rightAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(groupByAlias, rightAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(sumSourceAlias, leftAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(orderByAlias, sumAlias, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(selectedGroupByAttribute, groupByAttribute, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string leftJoinAttribute;
+        string rightJoinAttribute;
+
+        if (string.Equals(onLeftAlias, rightAlias, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(onRightAlias, leftAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            rightJoinAttribute = onLeftAttribute;
+            leftJoinAttribute = onRightAttribute;
+        }
+        else if (string.Equals(onLeftAlias, leftAlias, StringComparison.OrdinalIgnoreCase) &&
+                 string.Equals(onRightAlias, rightAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            leftJoinAttribute = onLeftAttribute;
+            rightJoinAttribute = onRightAttribute;
+        }
+        else
+        {
+            return false;
+        }
+
+        query = new AggregateJoinQueryModel
+        {
+            LeftTable = leftTable,
+            LeftAlias = leftAlias,
+            LeftJoinAttribute = leftJoinAttribute,
+            LeftSumAttribute = sumSourceAttribute,
+            RightTable = rightTable,
+            RightAlias = rightAlias,
+            RightJoinAttribute = rightJoinAttribute,
+            RightGroupByAttribute = groupByAttribute,
+            CountAlias = countAlias,
+            SumAlias = sumAlias,
+            OrderDirection = orderDirection,
+            Limit = limit
+        };
+
+        return true;
     }
 
     private static bool TryParseSelectDoubleJoinWhere(string queryText, out DoubleJoinQueryModel query)
@@ -728,6 +822,123 @@ public class RedisQueryExecutor
             totalRows,
             normalizedPage,
             pageSize);
+    }
+
+    private async Task<QueryExecutionResult> ExecuteSelectGroupByAggregateJoinAsync(
+        AggregateJoinQueryModel query,
+        int selectedDb)
+    {
+        var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
+        if (db == null)
+        {
+            return QueryExecutionResult.Fail($"Failed to get Redis database {selectedDb}.");
+        }
+
+        var schemaJson = await GetSchemaJsonAsync(selectedDb);
+
+        var resolvedLeftJoin = ResolveNames(schemaJson, query.LeftTable, query.LeftJoinAttribute);
+        var resolvedLeftSum = ResolveNames(schemaJson, query.LeftTable, query.LeftSumAttribute);
+        var resolvedRightJoin = ResolveNames(schemaJson, query.RightTable, query.RightJoinAttribute);
+        var resolvedRightGroupBy = ResolveNames(schemaJson, query.RightTable, query.RightGroupByAttribute);
+
+        var leftTableName = resolvedLeftJoin.resolvedTableName;
+        var leftJoinAttribute = resolvedLeftJoin.resolvedAttributeName;
+        var leftSumAttribute = resolvedLeftSum.resolvedAttributeName;
+        var rightTableName = resolvedRightJoin.resolvedTableName;
+        var rightJoinAttribute = resolvedRightJoin.resolvedAttributeName;
+        var rightGroupByAttribute = resolvedRightGroupBy.resolvedAttributeName;
+
+        var (_, leftIds) = await LoadIdsAsync(db, leftTableName, selectedDb);
+        if (leftIds.Count == 0)
+        {
+            return QueryExecutionResult.Success(
+                new List<string> { $"{query.RightAlias}.{rightGroupByAttribute}", query.CountAlias, query.SumAlias },
+                new List<Dictionary<string, string>>(),
+                0,
+                1,
+                query.Limit);
+        }
+
+        var leftHashes = await LoadHashesByIdsAsync(db, leftTableName, leftIds, RedisHashBatchSize);
+        var leftRows = leftHashes
+            .Select(ToDictionary)
+            .ToList();
+
+        var rightIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in leftRows)
+        {
+            var rightId = GetColumnValue(row, leftJoinAttribute);
+            if (!string.IsNullOrWhiteSpace(rightId))
+            {
+                rightIds.Add(rightId);
+            }
+        }
+
+        var rightRowsById = await LoadHashesByKeyValuesAsync(db, rightTableName, rightIds.ToList(), RedisHashBatchSize);
+
+        var groups = new Dictionary<string, (int items, decimal qty)>(StringComparer.Ordinal);
+        foreach (var leftRow in leftRows)
+        {
+            var rightId = GetColumnValue(leftRow, leftJoinAttribute);
+            if (string.IsNullOrWhiteSpace(rightId) || !rightRowsById.TryGetValue(rightId, out var rightRow))
+            {
+                continue;
+            }
+
+            var groupKey = GetColumnValue(rightRow, rightGroupByAttribute);
+            if (string.IsNullOrWhiteSpace(groupKey))
+            {
+                continue;
+            }
+
+            var qtyString = GetColumnValue(leftRow, leftSumAttribute);
+            if (!decimal.TryParse(qtyString, NumberStyles.Any, CultureInfo.InvariantCulture, out var qtyValue) &&
+                !decimal.TryParse(qtyString, out qtyValue))
+            {
+                qtyValue = 0;
+            }
+
+            if (!groups.TryGetValue(groupKey, out var current))
+            {
+                groups[groupKey] = (1, qtyValue);
+                continue;
+            }
+
+            groups[groupKey] = (current.items + 1, current.qty + qtyValue);
+        }
+
+        var orderedGroups = string.Equals(query.OrderDirection, "asc", StringComparison.OrdinalIgnoreCase)
+            ? groups.OrderBy(pair => pair.Value.qty).ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            : groups.OrderByDescending(pair => pair.Value.qty).ThenBy(pair => pair.Key, StringComparer.Ordinal);
+
+        var selectedGroups = orderedGroups
+            .Take(query.Limit)
+            .ToList();
+
+        var columns = new List<string>
+        {
+            $"{query.RightAlias}.{rightGroupByAttribute}",
+            query.CountAlias,
+            query.SumAlias
+        };
+
+        var rows = new List<Dictionary<string, string>>(selectedGroups.Count);
+        foreach (var group in selectedGroups)
+        {
+            rows.Add(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [columns[0]] = group.Key,
+                [columns[1]] = group.Value.items.ToString(CultureInfo.InvariantCulture),
+                [columns[2]] = group.Value.qty.ToString(CultureInfo.InvariantCulture)
+            });
+        }
+
+        return QueryExecutionResult.Success(
+            columns,
+            rows,
+            groups.Count,
+            1,
+            query.Limit);
     }
 
     private async Task<QueryExecutionResult> ExecuteSelectJoinWithWhereAsync(
@@ -1811,6 +2022,22 @@ public class RedisQueryExecutor
         public string WhereAttribute { get; init; } = string.Empty;
         public string WhereValue { get; init; } = string.Empty;
         public Dictionary<string, List<string>> SelectedColumns { get; init; } = new();
+    }
+
+    private sealed class AggregateJoinQueryModel
+    {
+        public string LeftTable { get; init; } = string.Empty;
+        public string LeftAlias { get; init; } = string.Empty;
+        public string LeftJoinAttribute { get; init; } = string.Empty;
+        public string LeftSumAttribute { get; init; } = string.Empty;
+        public string RightTable { get; init; } = string.Empty;
+        public string RightAlias { get; init; } = string.Empty;
+        public string RightJoinAttribute { get; init; } = string.Empty;
+        public string RightGroupByAttribute { get; init; } = string.Empty;
+        public string CountAlias { get; init; } = string.Empty;
+        public string SumAlias { get; init; } = string.Empty;
+        public string OrderDirection { get; init; } = string.Empty;
+        public int Limit { get; init; }
     }
 
     private sealed class ProjectedJoinQueryModel
