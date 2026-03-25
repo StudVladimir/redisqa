@@ -13,6 +13,10 @@ public class RedisQueryExecutor
 {
     private const int RedisHashBatchSize = 200;
 
+    private static readonly Regex SelectDoubleJoinWhereRegex = new(
+        @"^\s*select\s+(.+?)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex SelectProjectedJoinWithLeftWhereRegex = new(
         @"^\s*select\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+join\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+on\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+where\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -47,6 +51,21 @@ public class RedisQueryExecutor
         if (string.IsNullOrWhiteSpace(queryText))
         {
             return QueryExecutionResult.Fail("Query is empty.");
+        }
+
+        if (TryParseSelectDoubleJoinWhere(queryText, out var doubleJoinQuery))
+        {
+            if (pageNumber < 1)
+            {
+                pageNumber = 1;
+            }
+
+            if (pageSize < 1)
+            {
+                pageSize = 1;
+            }
+
+            return await ExecuteSelectDoubleJoinWhereAsync(doubleJoinQuery, selectedDb, pageNumber, pageSize);
         }
 
         if (TryParseSelectProjectedJoinWithLeftWhere(queryText, out var projectedJoinQuery))
@@ -124,7 +143,7 @@ public class RedisQueryExecutor
         if (!TryParseSelectAllFromTable(queryText, out var tableName))
         {
             return QueryExecutionResult.Fail(
-                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | SELECT oi.Product_id, oi.Quantity, p.Title, p.Price FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id WHERE oi.Order_id = 1. Operators: =, >, <, >=, <=");
+                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | Single JOIN: SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | Double JOIN: SELECT o.idOrder, oi.Product_id, p.Title FROM Orders o JOIN Order_Items oi ON oi.Order_id = o.idOrder JOIN Products p ON p.idProduct = oi.Product_id WHERE o.Users_id = 1. Operators: =, >, <, >=, <=");
         }
 
         if (pageNumber < 1)
@@ -138,6 +157,141 @@ public class RedisQueryExecutor
         }
 
         return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+    }
+
+    private static bool TryParseSelectDoubleJoinWhere(string queryText, out DoubleJoinQueryModel query)
+    {
+        query = new DoubleJoinQueryModel();
+
+        var match = SelectDoubleJoinWhereRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        // Parse selected columns (first part of regex)
+        var selectedColumnsStr = match.Groups[1].Value;
+        var selectedColumns = ParseSelectColumns(selectedColumnsStr);
+
+        var firstTable = match.Groups[2].Value;
+        var firstAlias = match.Groups[3].Value;
+        var secondTable = match.Groups[4].Value;
+        var secondAlias = match.Groups[5].Value;
+        var thirdTable = match.Groups[10].Value;
+        var thirdAlias = match.Groups[11].Value;
+
+        // First JOIN: 6=secondAlias, 7=secondAttr, 8=firstAlias, 9=firstAttr
+        var firstJoinLeft = match.Groups[6].Value;
+        var firstJoinLeftAttr = match.Groups[7].Value;
+        var firstJoinRight = match.Groups[8].Value;
+        var firstJoinRightAttr = match.Groups[9].Value;
+
+        // Second JOIN: 12=thirdAlias, 13=thirdAttr, 14=secondAlias, 15=secondAttr
+        var secondJoinLeft = match.Groups[12].Value;
+        var secondJoinLeftAttr = match.Groups[13].Value;
+        var secondJoinRight = match.Groups[14].Value;
+        var secondJoinRightAttr = match.Groups[15].Value;
+
+        // WHERE clause: 16=alias, 17=column, 18=value
+        var whereAlias = match.Groups[16].Value;
+        var whereAttribute = match.Groups[17].Value;
+        var whereValue = NormalizeWhereValue(match.Groups[18].Value);
+
+        // Determine join direction for first JOIN
+        string firstTableJoinAttr;
+        string secondTableJoinAttr;
+
+        if (string.Equals(firstJoinLeft, secondAlias, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(firstJoinRight, firstAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            secondTableJoinAttr = firstJoinLeftAttr;
+            firstTableJoinAttr = firstJoinRightAttr;
+        }
+        else if (string.Equals(firstJoinLeft, firstAlias, StringComparison.OrdinalIgnoreCase) &&
+                 string.Equals(firstJoinRight, secondAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            firstTableJoinAttr = firstJoinLeftAttr;
+            secondTableJoinAttr = firstJoinRightAttr;
+        }
+        else
+        {
+            return false;
+        }
+
+        // Determine join direction for second JOIN
+        string secondTableToThirdAttr;
+        string thirdTableJoinAttr;
+
+        if (string.Equals(secondJoinLeft, thirdAlias, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(secondJoinRight, secondAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            thirdTableJoinAttr = secondJoinLeftAttr;
+            secondTableToThirdAttr = secondJoinRightAttr;
+        }
+        else if (string.Equals(secondJoinLeft, secondAlias, StringComparison.OrdinalIgnoreCase) &&
+                 string.Equals(secondJoinRight, thirdAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            secondTableToThirdAttr = secondJoinLeftAttr;
+            thirdTableJoinAttr = secondJoinRightAttr;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(whereValue))
+        {
+            return false;
+        }
+
+        query = new DoubleJoinQueryModel
+        {
+            FirstTable = firstTable,
+            FirstAlias = firstAlias,
+            FirstTableJoinAttribute = firstTableJoinAttr,
+            SecondTable = secondTable,
+            SecondAlias = secondAlias,
+            SecondTableJoinAttribute = secondTableJoinAttr,
+            SecondTableToThirdAttribute = secondTableToThirdAttr,
+            ThirdTable = thirdTable,
+            ThirdAlias = thirdAlias,
+            ThirdTableJoinAttribute = thirdTableJoinAttr,
+            WhereAlias = whereAlias,
+            WhereAttribute = whereAttribute,
+            WhereValue = whereValue,
+            SelectedColumns = selectedColumns
+        };
+
+        return true;
+    }
+
+    private static Dictionary<string, List<string>> ParseSelectColumns(string columnsStr)
+    {
+        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        var parts = columnsStr.Split(',');
+        foreach (var part in parts)
+        {
+            var trimmed = part.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+                continue;
+
+            if (trimmed.Contains('.'))
+            {
+                var components = trimmed.Split('.');
+                var alias = components[0].Trim();
+                var column = components[1].Trim();
+
+                if (!result.ContainsKey(alias))
+                {
+                    result[alias] = new List<string>();
+                }
+
+                result[alias].Add(column);
+            }
+        }
+
+        return result;
     }
 
     private static bool TryParseSelectProjectedJoinWithLeftWhere(string queryText, out ProjectedJoinQueryModel query)
@@ -679,6 +833,172 @@ public class RedisQueryExecutor
             pageSize,
             joinColumnName,
             rightSelectedValue);
+    }
+
+    private async Task<QueryExecutionResult> ExecuteSelectDoubleJoinWhereAsync(
+        DoubleJoinQueryModel query,
+        int selectedDb,
+        int pageNumber,
+        int pageSize)
+    {
+        var db = RedisConnectionService.Instance.GetDatabase(selectedDb);
+        if (db == null)
+        {
+            return QueryExecutionResult.Fail($"Failed to get Redis database {selectedDb}.");
+        }
+
+        if (pageNumber < 1)
+            pageNumber = 1;
+        if (pageSize < 1)
+            pageSize = 1;
+
+        // Step 1: Get all IDs from first table matching WHERE condition
+        // Example: idx:Orders:Users_id:1 → [1, 2, 3, ...]
+        var firstTableIndexKey = $"idx:{query.FirstTable}:{query.WhereAttribute}:{query.WhereValue}";
+        var firstTableIds = await db.SetMembersAsync(firstTableIndexKey);
+
+        if (firstTableIds.Length == 0)
+        {
+            return QueryExecutionResult.Success(
+                BuildColumnNames(query),
+                new List<Dictionary<string, string>>(),
+                0,
+                pageNumber,
+                pageSize);
+        }
+
+        var normalizedFirstIds = NormalizeIds(firstTableIds);
+
+        // Step 2: Load first table records
+        // Example: Orders:1 → {idOrder: 1, Create_Date: ..., Users_id: 1}
+        var firstTableHashes = await LoadHashesByIdsAsync(db, query.FirstTable, normalizedFirstIds, RedisHashBatchSize);
+
+        // Step 3 & 4: For each first table record, get second table records
+        // Example: idx:Order_Items:Order_id:1 → [1, 2, 3, ...]
+        //          Order_Items:1 → {Order_id: 1, Product_id: 10, Quantity: 5}
+        var allResultRows = new List<Dictionary<string, string>>();
+
+        for (var firstIdx = 0; firstIdx < normalizedFirstIds.Count; firstIdx++)
+        {
+            var firstTableId = normalizedFirstIds[firstIdx];
+            var firstTableHash = firstTableHashes[firstIdx];
+            var firstTableData = ToDictionary(firstTableHash);
+
+            // Get second table IDs based on first table ID
+            var secondTableIndexKey = $"idx:{query.SecondTable}:{query.SecondTableJoinAttribute}:{firstTableId}";
+            var secondTableIds = await db.SetMembersAsync(secondTableIndexKey);
+
+            if (secondTableIds.Length == 0)
+                continue;
+
+            var normalizedSecondIds = NormalizeIds(secondTableIds);
+
+            // Load second table records
+            var secondTableHashes = await LoadHashesByIdsAsync(db, query.SecondTable, normalizedSecondIds, RedisHashBatchSize);
+
+            // For each second table record, get third table record
+            for (var secondIdx = 0; secondIdx < normalizedSecondIds.Count; secondIdx++)
+            {
+                var secondTableId = normalizedSecondIds[secondIdx];
+                var secondTableHash = secondTableHashes[secondIdx];
+                var secondTableData = ToDictionary(secondTableHash);
+
+                // Extract the key to join with third table
+                var thirdTableKey = secondTableData.ContainsKey(query.SecondTableToThirdAttribute)
+                    ? secondTableData[query.SecondTableToThirdAttribute]
+                    : string.Empty;
+
+                if (string.IsNullOrWhiteSpace(thirdTableKey))
+                    continue;
+
+                // Load third table record
+                var thirdTableHashKey = $"{query.ThirdTable}:{thirdTableKey}";
+                var thirdTableHash = await db.HashGetAllAsync(thirdTableHashKey);
+                var thirdTableData = ToDictionary(thirdTableHash);
+
+                // Build result row combining data from all three tables
+                var resultRow = new Dictionary<string, string>(StringComparer.Ordinal);
+
+                // Add selected columns
+                foreach (var (alias, columns) in query.SelectedColumns)
+                {
+                    if (string.Equals(alias, query.FirstAlias, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foreach (var col in columns)
+                        {
+                            var columnKey = $"{query.FirstAlias}.{col}";
+                            // Try to get from firstTableData, if not found use firstTableId (ID column)
+                            var value = firstTableData.ContainsKey(col) 
+                                ? firstTableData[col] 
+                                : firstTableId;
+                            resultRow[columnKey] = value;
+                        }
+                    }
+                    else if (string.Equals(alias, query.SecondAlias, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foreach (var col in columns)
+                        {
+                            var columnKey = $"{query.SecondAlias}.{col}";
+                            if (secondTableData.ContainsKey(col))
+                            {
+                                resultRow[columnKey] = secondTableData[col];
+                            }
+                            else
+                            {
+                                resultRow[columnKey] = string.Empty;
+                            }
+                        }
+                    }
+                    else if (string.Equals(alias, query.ThirdAlias, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foreach (var col in columns)
+                        {
+                            var columnKey = $"{query.ThirdAlias}.{col}";
+                            if (thirdTableData.ContainsKey(col))
+                            {
+                                resultRow[columnKey] = thirdTableData[col];
+                            }
+                            else
+                            {
+                                resultRow[columnKey] = string.Empty;
+                            }
+                        }
+                    }
+                }
+
+                allResultRows.Add(resultRow);
+            }
+        }
+
+        var totalRows = allResultRows.Count;
+
+        // Apply pagination
+        var pagedRows = allResultRows
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+
+        var columnNames = BuildColumnNames(query);
+
+        return QueryExecutionResult.Success(
+            columnNames,
+            pagedRows,
+            totalRows,
+            pageNumber,
+            pageSize);
+    }
+
+    private static List<string> BuildColumnNames(DoubleJoinQueryModel query)
+    {
+        var columns = new List<string>();
+        foreach (var (alias, columnList) in query.SelectedColumns)
+        {
+            foreach (var col in columnList)
+            {
+                columns.Add($"{alias}.{col}");
+            }
+        }
+        return columns;
     }
 
     private async Task<QueryExecutionResult> ExecuteSelectWithOrderByAndLimitAsync(
@@ -1473,6 +1793,24 @@ public class RedisQueryExecutor
         public string RightSelectedAttribute { get; init; } = string.Empty;
         public string WhereRightAttribute { get; init; } = string.Empty;
         public string WhereValue { get; init; } = string.Empty;
+    }
+
+    private sealed class DoubleJoinQueryModel
+    {
+        public string FirstTable { get; init; } = string.Empty;
+        public string FirstAlias { get; init; } = string.Empty;
+        public string FirstTableJoinAttribute { get; init; } = string.Empty;
+        public string SecondTable { get; init; } = string.Empty;
+        public string SecondAlias { get; init; } = string.Empty;
+        public string SecondTableJoinAttribute { get; init; } = string.Empty;
+        public string SecondTableToThirdAttribute { get; init; } = string.Empty;
+        public string ThirdTable { get; init; } = string.Empty;
+        public string ThirdAlias { get; init; } = string.Empty;
+        public string ThirdTableJoinAttribute { get; init; } = string.Empty;
+        public string WhereAlias { get; init; } = string.Empty;
+        public string WhereAttribute { get; init; } = string.Empty;
+        public string WhereValue { get; init; } = string.Empty;
+        public Dictionary<string, List<string>> SelectedColumns { get; init; } = new();
     }
 
     private sealed class ProjectedJoinQueryModel
