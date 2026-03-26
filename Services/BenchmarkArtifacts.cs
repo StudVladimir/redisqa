@@ -190,14 +190,22 @@ public static class BenchmarkArtifacts
 
 public static class DockerStatsSampler
 {
+    private const string DefaultContainerName = "dbb-redis";
+
     public static DockerStatsSample? TrySample(string phase)
     {
         try
         {
+            var containerName = Environment.GetEnvironmentVariable("REDISQA_DOCKER_CONTAINER");
+            if (string.IsNullOrWhiteSpace(containerName))
+            {
+                containerName = DefaultContainerName;
+            }
+
             var processStartInfo = new ProcessStartInfo
             {
                 FileName = "docker",
-                Arguments = "stats --no-stream --format {{json .}}",
+                Arguments = $"stats {containerName} --no-stream --format {{json .}}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -215,7 +223,21 @@ public static class DockerStatsSampler
 
             if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
             {
-                return null;
+                // Fallback to generic stats when targeted container is unavailable.
+                processStartInfo.Arguments = "stats --no-stream --format {{json .}}";
+                using var fallbackProcess = Process.Start(processStartInfo);
+                if (fallbackProcess == null)
+                {
+                    return null;
+                }
+
+                output = fallbackProcess.StandardOutput.ReadToEnd();
+                fallbackProcess.WaitForExit(5000);
+
+                if (fallbackProcess.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+                {
+                    return null;
+                }
             }
 
             var line = output
