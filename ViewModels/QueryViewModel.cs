@@ -461,7 +461,9 @@ public class QueryViewModel : BaseViewModel
         Directory.CreateDirectory(outputDir);
 
         var queryDefinitions = await BuildSequentialQueryDefinitionsAsync();
-        var latencyRecords = new List<BenchmarkLatencyRecord>(
+        var clientLatencyRecords = new List<BenchmarkLatencyRecord>(
+            SequentialWarmupRequestCount + (SequentialRequestsPerQuery * Math.Max(1, queryDefinitions.Count)));
+        var serverLatencyRecords = new List<BenchmarkLatencyRecord>(
             SequentialWarmupRequestCount + (SequentialRequestsPerQuery * Math.Max(1, queryDefinitions.Count)));
         var dockerSamples = new List<DockerStatsSample>();
 
@@ -482,11 +484,20 @@ public class QueryViewModel : BaseViewModel
                 var query = definition.BuildQuery(index + 1);
                 var iteration = await ExecuteBenchmarkIterationAsync(query, pageNumber, pageSize);
 
-                latencyRecords.Add(new BenchmarkLatencyRecord(
+                clientLatencyRecords.Add(new BenchmarkLatencyRecord(
                     "warmup",
                     index,
                     definition.QueryName,
                     iteration.ClientLatencyMs,
+                    iteration.RowsReturned,
+                    iteration.IsSuccess,
+                    iteration.Error));
+
+                serverLatencyRecords.Add(new BenchmarkLatencyRecord(
+                    "warmup",
+                    index,
+                    definition.QueryName,
+                    iteration.ServerLatencyMs,
                     iteration.RowsReturned,
                     iteration.IsSuccess,
                     iteration.Error));
@@ -516,11 +527,20 @@ public class QueryViewModel : BaseViewModel
                     var query = definition.BuildQuery(iterationIndex);
                     var iteration = await ExecuteBenchmarkIterationAsync(query, pageNumber, pageSize);
 
-                    latencyRecords.Add(new BenchmarkLatencyRecord(
+                    clientLatencyRecords.Add(new BenchmarkLatencyRecord(
                         "benchmark",
                         iterationIndex,
                         definition.QueryName,
                         iteration.ClientLatencyMs,
+                        iteration.RowsReturned,
+                        iteration.IsSuccess,
+                        iteration.Error));
+
+                    serverLatencyRecords.Add(new BenchmarkLatencyRecord(
+                        "benchmark",
+                        iterationIndex,
+                        definition.QueryName,
+                        iteration.ServerLatencyMs,
                         iteration.RowsReturned,
                         iteration.IsSuccess,
                         iteration.Error));
@@ -541,21 +561,36 @@ public class QueryViewModel : BaseViewModel
 
             TrySampleDocker("benchmark", dockerSamples);
 
-            var phaseSummary = BuildPhaseSummary(
-                latencyRecords,
+            var clientPhaseSummary = BuildPhaseSummary(
+                clientLatencyRecords,
                 dockerSamples,
                 queryDefinitions.Select(x => x.QueryName).ToList());
 
-            var latenciesPath = Path.Combine(outputDir, "latencies.csv");
-            var dockerStatsPath = Path.Combine(outputDir, "docker_stats_samples.csv");
-            var phaseSummaryPath = Path.Combine(outputDir, "phase_summary.csv");
+            var serverPhaseSummary = BuildPhaseSummary(
+                serverLatencyRecords,
+                dockerSamples,
+                queryDefinitions.Select(x => x.QueryName).ToList());
 
-            await BenchmarkArtifacts.WriteLatenciesAsync(latenciesPath, latencyRecords);
+            var clientLatenciesPath = Path.Combine(outputDir, "latencies_client.csv");
+            var serverLatenciesPath = Path.Combine(outputDir, "latencies_server.csv");
+            var dockerStatsPath = Path.Combine(outputDir, "docker_stats_samples.csv");
+            var clientPhaseSummaryPath = Path.Combine(outputDir, "phase_summary_client.csv");
+            var serverPhaseSummaryPath = Path.Combine(outputDir, "phase_summary_server.csv");
+
+            // Backward compatibility: keep legacy names as aliases of client metrics.
+            var legacyLatenciesPath = Path.Combine(outputDir, "latencies.csv");
+            var legacyPhaseSummaryPath = Path.Combine(outputDir, "phase_summary.csv");
+
+            await BenchmarkArtifacts.WriteLatenciesAsync(clientLatenciesPath, clientLatencyRecords);
+            await BenchmarkArtifacts.WriteLatenciesAsync(serverLatenciesPath, serverLatencyRecords);
+            await BenchmarkArtifacts.WriteLatenciesAsync(legacyLatenciesPath, clientLatencyRecords);
             await BenchmarkArtifacts.WriteDockerStatsAsync(dockerStatsPath, dockerSamples);
-            await BenchmarkArtifacts.WritePhaseSummaryAsync(phaseSummaryPath, phaseSummary);
+            await BenchmarkArtifacts.WritePhaseSummaryAsync(clientPhaseSummaryPath, clientPhaseSummary);
+            await BenchmarkArtifacts.WritePhaseSummaryAsync(serverPhaseSummaryPath, serverPhaseSummary);
+            await BenchmarkArtifacts.WritePhaseSummaryAsync(legacyPhaseSummaryPath, clientPhaseSummary);
 
             BenchmarkStatusMessage =
-                $"Sequential benchmark complete. Latencies: {latenciesPath} | Docker: {dockerStatsPath} | Summary: {phaseSummaryPath}";
+                $"Sequential benchmark complete. Client: {clientLatenciesPath}, {clientPhaseSummaryPath} | Server: {serverLatenciesPath}, {serverPhaseSummaryPath} | Docker: {dockerStatsPath}";
         }
         finally
         {
@@ -688,6 +723,7 @@ public class QueryViewModel : BaseViewModel
         return new BenchmarkIterationResult(
             iterationResult.IsSuccess,
             clientStopwatch.Elapsed.TotalMilliseconds,
+            iterationResult.ServerLatencyMs,
             iterationResult.IsSuccess ? iterationResult.Rows.Count : 0,
             iterationResult.IsSuccess
                 ? string.Empty
@@ -883,6 +919,7 @@ public sealed record SequentialQueryDefinition(string QueryName, Func<int, strin
 public sealed record BenchmarkIterationResult(
     bool IsSuccess,
     double ClientLatencyMs,
+    double ServerLatencyMs,
     int RowsReturned,
     string Error);
 
