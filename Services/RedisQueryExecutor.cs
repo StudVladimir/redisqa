@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using StackExchange.Redis;
 
@@ -12,6 +14,7 @@ namespace redisqa.Services;
 public class RedisQueryExecutor
 {
     private const int RedisHashBatchSize = 200;
+    private static readonly AsyncLocal<RedisTimingContext?> RedisTimingContextHolder = new();
 
     private static readonly Regex SelectGroupByCountRegex = new(
         @"^\s*select\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*count\(\*\)\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s+group\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s+order\s+by\s+([A-Za-z_][A-Za-z0-9_]*)\s+(asc|desc)\s+limit\s+(\d+)\s*;?\s*$",
@@ -61,18 +64,136 @@ public class RedisQueryExecutor
             return QueryExecutionResult.Fail("Query is empty.");
         }
 
-        if (TryParseSelectGroupByCount(queryText, out var groupByCountQuery))
-        {
-            return await ExecuteSelectGroupByCountAsync(groupByCountQuery, selectedDb);
-        }
+        var timingContext = new RedisTimingContext();
+        var previousContext = RedisTimingContextHolder.Value;
+        RedisTimingContextHolder.Value = timingContext;
 
-        if (TryParseSelectGroupByAggregateJoin(queryText, out var aggregateQuery))
+        try
         {
-            return await ExecuteSelectGroupByAggregateJoinAsync(aggregateQuery, selectedDb);
-        }
+            QueryExecutionResult executionResult;
 
-        if (TryParseSelectDoubleJoinWhere(queryText, out var doubleJoinQuery))
-        {
+            if (TryParseSelectGroupByCount(queryText, out var groupByCountQuery))
+            {
+                executionResult = await ExecuteSelectGroupByCountAsync(groupByCountQuery, selectedDb);
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
+            if (TryParseSelectGroupByAggregateJoin(queryText, out var aggregateQuery))
+            {
+                executionResult = await ExecuteSelectGroupByAggregateJoinAsync(aggregateQuery, selectedDb);
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
+            if (TryParseSelectDoubleJoinWhere(queryText, out var doubleJoinQuery))
+            {
+                if (pageNumber < 1)
+                {
+                    pageNumber = 1;
+                }
+
+                if (pageSize < 1)
+                {
+                    pageSize = 1;
+                }
+
+                executionResult = await ExecuteSelectDoubleJoinWhereAsync(doubleJoinQuery, selectedDb, pageNumber, pageSize);
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
+            if (TryParseSelectProjectedJoinWithLeftWhere(queryText, out var projectedJoinQuery))
+            {
+                if (pageNumber < 1)
+                {
+                    pageNumber = 1;
+                }
+
+                if (pageSize < 1)
+                {
+                    pageSize = 1;
+                }
+
+                executionResult = await ExecuteSelectProjectedJoinWithLeftWhereAsync(projectedJoinQuery, selectedDb, pageNumber, pageSize);
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
+            if (TryParseSelectJoinWithWhere(queryText, out var joinQuery))
+            {
+                if (pageNumber < 1)
+                {
+                    pageNumber = 1;
+                }
+
+                if (pageSize < 1)
+                {
+                    pageSize = 1;
+                }
+
+                executionResult = await ExecuteSelectJoinWithWhereAsync(joinQuery, selectedDb, pageNumber, pageSize);
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
+            if (TryParseSelectOrderByLimitOffset(queryText, out var orderByTableName, out var orderByAttribute, out var limit, out var offset))
+            {
+                if (limit < 1)
+                {
+                    limit = 1;
+                }
+
+                if (offset < 0)
+                {
+                    offset = 0;
+                }
+
+                executionResult = await ExecuteSelectWithOrderByAndLimitAsync(
+                    orderByTableName,
+                    orderByAttribute,
+                    limit,
+                    offset,
+                    selectedDb);
+
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
+            if (TryParseSelectWhereWithComparison(queryText, out var whereTableName, out var whereAttributeName, out var whereOperator, out var whereValue, out var whereLimit))
+            {
+                int? fetchLimit = null;
+
+                if (whereLimit.HasValue)
+                {
+                    pageNumber = 1;
+                    pageSize = whereLimit.Value;
+                    fetchLimit = whereLimit.Value;
+                }
+                else if (pageNumber < 1)
+                {
+                    pageNumber = 1;
+                }
+
+                if (pageSize < 1)
+                {
+                    pageSize = 1;
+                }
+
+                executionResult = await ExecuteSelectWhereFromTableAsync(
+                    whereTableName,
+                    whereAttributeName,
+                    whereOperator,
+                    whereValue,
+                    selectedDb,
+                    pageNumber,
+                    pageSize,
+                    fetchLimit);
+
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
+            if (!TryParseSelectAllFromTable(queryText, out var tableName))
+            {
+                executionResult = QueryExecutionResult.Fail(
+                    "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | GROUP BY: SELECT pc.Category_id, COUNT(*) cnt FROM Product_Categories pc GROUP BY pc.Category_id ORDER BY cnt DESC LIMIT 10 | Single JOIN: SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | Double JOIN: SELECT o.idOrder, oi.Product_id, p.Title FROM Orders o JOIN Order_Items oi ON oi.Order_id = o.idOrder JOIN Products p ON p.idProduct = oi.Product_id WHERE o.Users_id = 1 | Aggregate JOIN: SELECT p.Seller_id, COUNT(*) AS items, SUM(oi.Quantity) AS qty FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id GROUP BY p.Seller_id ORDER BY qty DESC LIMIT 20. Operators: =, >, <, >=, <=");
+                return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
+            }
+
             if (pageNumber < 1)
             {
                 pageNumber = 1;
@@ -83,107 +204,13 @@ public class RedisQueryExecutor
                 pageSize = 1;
             }
 
-            return await ExecuteSelectDoubleJoinWhereAsync(doubleJoinQuery, selectedDb, pageNumber, pageSize);
+            executionResult = await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
+            return executionResult.WithServerLatencyMs(timingContext.TotalMilliseconds);
         }
-
-        if (TryParseSelectProjectedJoinWithLeftWhere(queryText, out var projectedJoinQuery))
+        finally
         {
-            if (pageNumber < 1)
-            {
-                pageNumber = 1;
-            }
-
-            if (pageSize < 1)
-            {
-                pageSize = 1;
-            }
-
-            return await ExecuteSelectProjectedJoinWithLeftWhereAsync(projectedJoinQuery, selectedDb, pageNumber, pageSize);
+            RedisTimingContextHolder.Value = previousContext;
         }
-
-        if (TryParseSelectJoinWithWhere(queryText, out var joinQuery))
-        {
-            if (pageNumber < 1)
-            {
-                pageNumber = 1;
-            }
-
-            if (pageSize < 1)
-            {
-                pageSize = 1;
-            }
-
-            return await ExecuteSelectJoinWithWhereAsync(joinQuery, selectedDb, pageNumber, pageSize);
-        }
-
-        if (TryParseSelectOrderByLimitOffset(queryText, out var orderByTableName, out var orderByAttribute, out var limit, out var offset))
-        {
-            if (limit < 1)
-            {
-                limit = 1;
-            }
-
-            if (offset < 0)
-            {
-                offset = 0;
-            }
-
-            return await ExecuteSelectWithOrderByAndLimitAsync(
-                orderByTableName,
-                orderByAttribute,
-                limit,
-                offset,
-                selectedDb);
-        }
-
-        if (TryParseSelectWhereWithComparison(queryText, out var whereTableName, out var whereAttributeName, out var whereOperator, out var whereValue, out var whereLimit))
-        {
-            int? fetchLimit = null;
-
-            if (whereLimit.HasValue)
-            {
-                pageNumber = 1;
-                pageSize = whereLimit.Value;
-                fetchLimit = whereLimit.Value;
-            }
-            else if (pageNumber < 1)
-            {
-                pageNumber = 1;
-            }
-
-            if (pageSize < 1)
-            {
-                pageSize = 1;
-            }
-
-            return await ExecuteSelectWhereFromTableAsync(
-                whereTableName,
-                whereAttributeName,
-                whereOperator,
-                whereValue,
-                selectedDb,
-                pageNumber,
-                pageSize,
-                fetchLimit);
-        }
-
-        if (!TryParseSelectAllFromTable(queryText, out var tableName))
-        {
-            return QueryExecutionResult.Fail(
-                "Invalid query format. Supported: SELECT * FROM {table} | SELECT * FROM {table} WHERE {attr} {op} {val} | SELECT * FROM {table} ORDER BY {attr} LIMIT {n} [OFFSET {m}] | GROUP BY: SELECT pc.Category_id, COUNT(*) cnt FROM Product_Categories pc GROUP BY pc.Category_id ORDER BY cnt DESC LIMIT 10 | Single JOIN: SELECT p.*, s.Name FROM Products p JOIN Sellers s ON s.idSeller = p.Seller_id WHERE s.idSeller = 1 | Double JOIN: SELECT o.idOrder, oi.Product_id, p.Title FROM Orders o JOIN Order_Items oi ON oi.Order_id = o.idOrder JOIN Products p ON p.idProduct = oi.Product_id WHERE o.Users_id = 1 | Aggregate JOIN: SELECT p.Seller_id, COUNT(*) AS items, SUM(oi.Quantity) AS qty FROM Order_Items oi JOIN Products p ON p.idProduct = oi.Product_id GROUP BY p.Seller_id ORDER BY qty DESC LIMIT 20. Operators: =, >, <, >=, <=");
-        }
-
-        if (pageNumber < 1)
-        {
-            pageNumber = 1;
-        }
-
-        if (pageSize < 1)
-        {
-            pageSize = 1;
-        }
-
-        return await ExecuteSelectAllFromTableAsync(tableName, selectedDb, pageNumber, pageSize);
     }
 
     private static bool TryParseSelectGroupByCount(string queryText, out GroupByCountQueryModel query)
@@ -809,7 +836,7 @@ public class RedisQueryExecutor
         }
 
         var indexSetKey = $"idx:{leftTableName}:{leftWhereAttribute}:{query.WhereValue}";
-        var matchedIds = NormalizeIds(await db.SetMembersAsync(indexSetKey));
+        var matchedIds = NormalizeIds(await MeasureRedisAsync(() => db.SetMembersAsync(indexSetKey)));
 
         var totalRows = matchedIds.Count;
         if (totalRows == 0)
@@ -1154,7 +1181,7 @@ public class RedisQueryExecutor
         }
 
         var indexSetKey = $"idx:{resolvedLeftTableName}:{resolvedLeftJoinAttribute}:{query.WhereValue}";
-        var matchedIds = NormalizeIds(await db.SetMembersAsync(indexSetKey));
+        var matchedIds = NormalizeIds(await MeasureRedisAsync(() => db.SetMembersAsync(indexSetKey)));
 
         var totalRows = matchedIds.Count;
         if (totalRows == 0)
@@ -1176,7 +1203,7 @@ public class RedisQueryExecutor
             .ToList();
 
         var rightKey = $"{resolvedRightTableName}:{query.WhereValue}";
-        var rightHash = await db.HashGetAllAsync(rightKey);
+        var rightHash = await MeasureRedisAsync(() => db.HashGetAllAsync(rightKey));
 
         var rightSelectedValue = string.Empty;
         foreach (var entry in rightHash)
@@ -1220,7 +1247,7 @@ public class RedisQueryExecutor
         // Step 1: Get all IDs from first table matching WHERE condition
         // Example: idx:Orders:Users_id:1 → [1, 2, 3, ...]
         var firstTableIndexKey = $"idx:{query.FirstTable}:{query.WhereAttribute}:{query.WhereValue}";
-        var firstTableIds = await db.SetMembersAsync(firstTableIndexKey);
+        var firstTableIds = await MeasureRedisAsync(() => db.SetMembersAsync(firstTableIndexKey));
 
         if (firstTableIds.Length == 0)
         {
@@ -1251,7 +1278,7 @@ public class RedisQueryExecutor
 
             // Get second table IDs based on first table ID
             var secondTableIndexKey = $"idx:{query.SecondTable}:{query.SecondTableJoinAttribute}:{firstTableId}";
-            var secondTableIds = await db.SetMembersAsync(secondTableIndexKey);
+            var secondTableIds = await MeasureRedisAsync(() => db.SetMembersAsync(secondTableIndexKey));
 
             if (secondTableIds.Length == 0)
                 continue;
@@ -1278,7 +1305,7 @@ public class RedisQueryExecutor
 
                 // Load third table record
                 var thirdTableHashKey = $"{query.ThirdTable}:{thirdTableKey}";
-                var thirdTableHash = await db.HashGetAllAsync(thirdTableHashKey);
+                var thirdTableHash = await MeasureRedisAsync(() => db.HashGetAllAsync(thirdTableHashKey));
                 var thirdTableData = ToDictionary(thirdTableHash);
 
                 // Build result row combining data from all three tables
@@ -1399,7 +1426,7 @@ public class RedisQueryExecutor
         }
 
         var pkSetKey = $"idx:pk:{tablePrimaryKeyInfo.resolvedTableName}:{tablePrimaryKeyInfo.pkColumn}";
-        var ids = await db.SetMembersAsync(pkSetKey);
+        var ids = await MeasureRedisAsync(() => db.SetMembersAsync(pkSetKey));
 
         var orderedIds = SortValues(NormalizeIds(ids));
         var slicedIds = orderedIds
@@ -1518,7 +1545,7 @@ public class RedisQueryExecutor
 
             batch.Execute();
 
-            var chunkHashes = await Task.WhenAll(batchTasks);
+            var chunkHashes = await MeasureRedisAsync(() => Task.WhenAll(batchTasks));
             hashes.AddRange(chunkHashes);
         }
 
@@ -1672,7 +1699,7 @@ public class RedisQueryExecutor
     {
         // Get all PK IDs
         var pkSetKey = $"idx:pk:{tableName}:{pkAttribute}";
-        var allPkIds = await db.SetMembersAsync(pkSetKey);
+        var allPkIds = await MeasureRedisAsync(() => db.SetMembersAsync(pkSetKey));
         var ids = NormalizeIds(allPkIds);
 
         if (ids.Count == 0)
@@ -1743,7 +1770,7 @@ public class RedisQueryExecutor
         }
 
         var legacySetKey = $"idx:pk:{tablePrimaryKeyInfo.resolvedTableName}:{tablePrimaryKeyInfo.pkColumn}";
-        var ids = await db.SetMembersAsync(legacySetKey);
+        var ids = await MeasureRedisAsync(() => db.SetMembersAsync(legacySetKey));
 
         return (tablePrimaryKeyInfo.resolvedTableName, NormalizeIds(ids));
     }
@@ -1785,7 +1812,7 @@ public class RedisQueryExecutor
                     string.Equals(primaryKeyInfo.pkColumn, resolvedAttributeName, StringComparison.OrdinalIgnoreCase))
                 {
                     var directHashKey = $"{resolvedTableName}:{value}";
-                    var exists = await db.KeyExistsAsync(directHashKey);
+                    var exists = await MeasureRedisAsync(() => db.KeyExistsAsync(directHashKey));
 
                     return exists
                         ? (resolvedTableName, new List<string> { value })
@@ -1796,14 +1823,15 @@ public class RedisQueryExecutor
             var indexSetKey = $"idx:{resolvedTableName}:{resolvedAttributeName}:{value}";
             if (maxIds.HasValue)
             {
-                var limitedIds = db.SetScan(indexSetKey, pageSize: Math.Min(1000, Math.Max(1, maxIds.Value)))
-                    .Take(maxIds.Value)
-                    .ToArray();
+                var limitedIds = MeasureRedis(() =>
+                    db.SetScan(indexSetKey, pageSize: Math.Min(1000, Math.Max(1, maxIds.Value)))
+                        .Take(maxIds.Value)
+                        .ToArray());
 
                 return (resolvedTableName, NormalizeIds(limitedIds));
             }
 
-            var allIds = await db.SetMembersAsync(indexSetKey);
+            var allIds = await MeasureRedisAsync(() => db.SetMembersAsync(indexSetKey));
             return (resolvedTableName, NormalizeIds(allIds));
         }
 
@@ -1839,7 +1867,9 @@ public class RedisQueryExecutor
         try
         {
             // Scan all keys matching the pattern idx:table:attribute:*
-            var keys = server.Keys(database: db.Database, pattern: $"{indexKeyPrefix}*", pageSize: 1000);
+            var keys = MeasureRedis(() =>
+                server.Keys(database: db.Database, pattern: $"{indexKeyPrefix}*", pageSize: 1000)
+                    .ToArray());
 
             foreach (var key in keys)
             {
@@ -1856,7 +1886,8 @@ public class RedisQueryExecutor
                         ? Math.Min(1000, Math.Max(1, maxIds.Value))
                         : 1000;
 
-                    foreach (var member in db.SetScan(key, pageSize: pageSize))
+                    var members = MeasureRedis(() => db.SetScan(key, pageSize: pageSize).ToArray());
+                    foreach (var member in members)
                     {
                         var id = member.ToString();
                         if (!string.IsNullOrWhiteSpace(id))
@@ -1910,7 +1941,7 @@ public class RedisQueryExecutor
 
             batch.Execute();
 
-            var hashes = await Task.WhenAll(tasks);
+            var hashes = await MeasureRedisAsync(() => Task.WhenAll(tasks));
             for (var index = 0; index < chunk.Length; index++)
             {
                 result[chunk[index]] = ToDictionary(hashes[index]);
@@ -1995,7 +2026,35 @@ public class RedisQueryExecutor
             return schemaJson;
         }
 
-        return await schemaService.GetSchemaAsync(selectedDb);
+        return await MeasureRedisAsync(() => schemaService.GetSchemaAsync(selectedDb));
+    }
+
+    private static async Task<T> MeasureRedisAsync<T>(Func<Task<T>> redisCall)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            return await redisCall();
+        }
+        finally
+        {
+            stopwatch.Stop();
+            RedisTimingContextHolder.Value?.Add(stopwatch.ElapsedTicks);
+        }
+    }
+
+    private static T MeasureRedis<T>(Func<T> redisCall)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            return redisCall();
+        }
+        finally
+        {
+            stopwatch.Stop();
+            RedisTimingContextHolder.Value?.Add(stopwatch.ElapsedTicks);
+        }
     }
 
     private static List<string> NormalizeIds(IEnumerable<RedisValue> values)
@@ -2183,6 +2242,18 @@ public class RedisQueryExecutor
         return false;
     }
 
+    private sealed class RedisTimingContext
+    {
+        private long _elapsedTicks;
+
+        public double TotalMilliseconds => _elapsedTicks * 1000d / Stopwatch.Frequency;
+
+        public void Add(long elapsedTicks)
+        {
+            _elapsedTicks += elapsedTicks;
+        }
+    }
+
     private sealed class JoinQueryModel
     {
         public string LeftTable { get; init; } = string.Empty;
@@ -2266,6 +2337,7 @@ public sealed class QueryExecutionResult
     public int TotalRows { get; }
     public int PageNumber { get; }
     public int PageSize { get; }
+    public double ServerLatencyMs { get; }
 
     private QueryExecutionResult(
         bool isSuccess,
@@ -2274,7 +2346,8 @@ public sealed class QueryExecutionResult
         IReadOnlyList<Dictionary<string, string>> rows,
         int totalRows,
         int pageNumber,
-        int pageSize)
+        int pageSize,
+        double serverLatencyMs)
     {
         IsSuccess = isSuccess;
         ErrorMessage = errorMessage;
@@ -2283,6 +2356,7 @@ public sealed class QueryExecutionResult
         TotalRows = totalRows;
         PageNumber = pageNumber;
         PageSize = pageSize;
+        ServerLatencyMs = serverLatencyMs;
     }
 
     public static QueryExecutionResult Success(
@@ -2290,7 +2364,8 @@ public sealed class QueryExecutionResult
         IReadOnlyList<Dictionary<string, string>> rows,
         int totalRows,
         int pageNumber,
-        int pageSize)
+        int pageSize,
+        double serverLatencyMs = 0)
     {
         return new QueryExecutionResult(
             true,
@@ -2299,7 +2374,8 @@ public sealed class QueryExecutionResult
             rows,
             totalRows,
             pageNumber,
-            pageSize);
+            pageSize,
+            serverLatencyMs);
     }
 
     public static QueryExecutionResult Fail(string errorMessage)
@@ -2311,6 +2387,20 @@ public sealed class QueryExecutionResult
             Array.Empty<Dictionary<string, string>>(),
             0,
             1,
+            0,
             0);
+    }
+
+    public QueryExecutionResult WithServerLatencyMs(double serverLatencyMs)
+    {
+        return new QueryExecutionResult(
+            IsSuccess,
+            ErrorMessage,
+            Columns,
+            Rows,
+            TotalRows,
+            PageNumber,
+            PageSize,
+            serverLatencyMs);
     }
 }

@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using redisqa.Services;
 
@@ -9,6 +12,11 @@ namespace redisqa.ViewModels;
 
 public class QueryViewModel : BaseViewModel
 {
+    private const int BenchmarkRepeatCount = 1000;
+    private static readonly Regex BenchmarkIncrementIdRegex = new(
+        @"(\bwhere\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?idUser\s*=\s*)(['""]?)(\d+)\2",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly RedisQueryExecutor _queryExecutor = new();
 
     private int _selectedDb;
@@ -21,6 +29,8 @@ public class QueryViewModel : BaseViewModel
     private string _emptyStateMessage = "Run a query to see results";
     private bool _hasExecutedQuery;
     private string _lastExecutedQuery = string.Empty;
+    private string _benchmarkQueryName = string.Empty;
+    private string _benchmarkStatusMessage = string.Empty;
 
     public int SelectedDb
     {
@@ -42,6 +52,30 @@ public class QueryViewModel : BaseViewModel
             OnPropertyChanged(nameof(CanRunQuery));
         }
     }
+
+    public string BenchmarkQueryName
+    {
+        get => _benchmarkQueryName;
+        set
+        {
+            _benchmarkQueryName = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanRunQuery));
+        }
+    }
+
+    public string BenchmarkStatusMessage
+    {
+        get => _benchmarkStatusMessage;
+        set
+        {
+            _benchmarkStatusMessage = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasBenchmarkStatus));
+        }
+    }
+
+    public bool HasBenchmarkStatus => !string.IsNullOrWhiteSpace(BenchmarkStatusMessage);
 
     public bool IsBusy
     {
@@ -139,7 +173,9 @@ public class QueryViewModel : BaseViewModel
         }
     }
 
-    public bool CanRunQuery => !IsBusy && !string.IsNullOrWhiteSpace(QueryText);
+    public bool CanRunQuery => !IsBusy
+                               && !string.IsNullOrWhiteSpace(QueryText)
+                               && !string.IsNullOrWhiteSpace(BenchmarkQueryName);
 
     public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalRows / (double)PageSize));
 
@@ -184,7 +220,7 @@ public class QueryViewModel : BaseViewModel
 
     public async Task RunQueryAsync(bool resetPage = true)
     {
-        if (IsBusy || string.IsNullOrWhiteSpace(QueryText))
+        if (IsBusy || string.IsNullOrWhiteSpace(QueryText) || string.IsNullOrWhiteSpace(BenchmarkQueryName))
         {
             return;
         }
@@ -197,7 +233,18 @@ public class QueryViewModel : BaseViewModel
             CurrentPage = 1;
         }
 
-        await ExecuteCurrentQueryAsync();
+        var executionResult = await ExecuteCurrentQueryAsync();
+        if (executionResult is null || !executionResult.IsSuccess)
+        {
+            return;
+        }
+
+        if (!resetPage)
+        {
+            return;
+        }
+
+        await RunBenchmarkAsync(_lastExecutedQuery, BenchmarkQueryName.Trim(), CurrentPage, PageSize);
     }
 
     public async Task LoadPreviousPageAsync()
@@ -233,11 +280,11 @@ public class QueryViewModel : BaseViewModel
         await ExecuteCurrentQueryAsync();
     }
 
-    private async Task ExecuteCurrentQueryAsync()
+    private async Task<QueryExecutionResult?> ExecuteCurrentQueryAsync()
     {
         if (string.IsNullOrWhiteSpace(_lastExecutedQuery))
         {
-            return;
+            return null;
         }
 
         IsBusy = true;
@@ -260,7 +307,7 @@ public class QueryViewModel : BaseViewModel
                 _hasExecutedQuery = false;
                 QueryErrorMessage = executionResult.ErrorMessage ?? "Query execution failed.";
                 EmptyStateMessage = "Run a valid query to see results.";
-                return;
+                return executionResult;
             }
 
             TotalRows = executionResult.TotalRows;
@@ -270,6 +317,8 @@ public class QueryViewModel : BaseViewModel
             EmptyStateMessage = TotalRows == 0
                 ? "No rows found."
                 : "Run a query to see results";
+
+            return executionResult;
         }
         catch (Exception ex)
         {
@@ -280,10 +329,124 @@ public class QueryViewModel : BaseViewModel
             _hasExecutedQuery = false;
             QueryErrorMessage = $"Query execution failed: {ex.Message}";
             EmptyStateMessage = "Run a valid query to see results.";
+            return QueryExecutionResult.Fail(QueryErrorMessage);
         }
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    private async Task RunBenchmarkAsync(string queryText, string queryName, int pageNumber, int pageSize)
+    {
+        IsBusy = true;
+        BenchmarkStatusMessage = $"Benchmark started: 0/{BenchmarkRepeatCount}";
+
+        var serverRecords = new List<BenchmarkCsvRecord>(BenchmarkRepeatCount);
+        var clientRecords = new List<BenchmarkCsvRecord>(BenchmarkRepeatCount);
+
+        try
+        {
+            for (var index = 1; index <= BenchmarkRepeatCount; index++)
+            {
+                QueryExecutionResult iterationResult;
+                var clientStopwatch = Stopwatch.StartNew();
+                var queryForIteration = BuildBenchmarkQueryForIteration(queryText, index);
+
+                try
+                {
+                    iterationResult = await _queryExecutor.ExecuteAsync(queryForIteration, SelectedDb, pageNumber, pageSize);
+                }
+                catch (Exception ex)
+                {
+                    iterationResult = QueryExecutionResult.Fail($"Query execution failed: {ex.Message}");
+                }
+
+                if (iterationResult.IsSuccess)
+                {
+                    SimulateClientResultMaterialization(iterationResult);
+                }
+
+                clientStopwatch.Stop();
+
+                var rowsReturned = iterationResult.IsSuccess ? iterationResult.Rows.Count : 0;
+                var error = iterationResult.IsSuccess
+                    ? string.Empty
+                    : iterationResult.ErrorMessage ?? "Query execution failed.";
+
+                serverRecords.Add(new BenchmarkCsvRecord(
+                    index,
+                    queryName,
+                    iterationResult.ServerLatencyMs,
+                    rowsReturned,
+                    iterationResult.IsSuccess,
+                    error));
+
+                clientRecords.Add(new BenchmarkCsvRecord(
+                    index,
+                    queryName,
+                    clientStopwatch.Elapsed.TotalMilliseconds,
+                    rowsReturned,
+                    iterationResult.IsSuccess,
+                    error));
+
+                if (index % 50 == 0 || index == BenchmarkRepeatCount)
+                {
+                    BenchmarkStatusMessage = $"Benchmark progress: {index}/{BenchmarkRepeatCount}";
+                }
+            }
+
+            var outputDir = Path.Combine(Directory.GetCurrentDirectory(), "benchmark-results");
+            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var serverCsvPath = Path.Combine(outputDir, $"server_metrics_{timestamp}.csv");
+            var clientCsvPath = Path.Combine(outputDir, $"client_metrics_{timestamp}.csv");
+
+            await BenchmarkCsvWriter.WriteAsync(serverCsvPath, serverRecords);
+            await BenchmarkCsvWriter.WriteAsync(clientCsvPath, clientRecords);
+
+            BenchmarkStatusMessage = $"Benchmark complete. Server CSV: {serverCsvPath} | Client CSV: {clientCsvPath}";
+            Debug.WriteLine(BenchmarkStatusMessage);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private static string BuildBenchmarkQueryForIteration(string queryText, int iterationIndex)
+    {
+        if (string.IsNullOrWhiteSpace(queryText))
+        {
+            return queryText;
+        }
+
+        var match = BenchmarkIncrementIdRegex.Match(queryText);
+        if (!match.Success)
+        {
+            return queryText;
+        }
+
+        if (!int.TryParse(match.Groups[3].Value, out var startId))
+        {
+            return queryText;
+        }
+
+        var nextId = startId + iterationIndex - 1;
+        var prefix = match.Groups[1].Value;
+        var quote = match.Groups[2].Value;
+        var replacement = string.Concat(prefix, quote, nextId.ToString(), quote);
+
+        return BenchmarkIncrementIdRegex.Replace(queryText, replacement, 1);
+    }
+
+    private static void SimulateClientResultMaterialization(QueryExecutionResult executionResult)
+    {
+        var columns = executionResult.Columns.ToList();
+        foreach (var row in executionResult.Rows)
+        {
+            _ = columns
+                .Select(column => row.TryGetValue(column, out var value) ? value : string.Empty)
+                .ToList();
         }
     }
 
