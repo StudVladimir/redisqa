@@ -1,0 +1,5 @@
+﻿db,phase,query_name,duration_sec,total_requests,success_requests,error_requests,ops_per_sec,p50_ms,p95_ms,p99_ms,avg_rows_returned,total_rows_returned,avg_cpu_percent,max_cpu_percent,avg_mem_percent,max_mem_percent,mem_limit_bytes,net_in_delta_bytes,net_out_delta_bytes,block_in_delta_bytes,block_out_delta_bytes
+redis,warmup,q1_user_by_id,0.34816469999999999,100,100,0,287.22038736264761,0.3876,0.84430499999999997,7.3256420000000828,1,100,nan,nan,nan,nan,nan,0,0,0,0
+redis,warmup,q3_user_by_login,0.34816469999999999,100,100,0,287.22038736264761,0.51524999999999999,2.3772199999999972,12.391665000000039,1,100,nan,nan,nan,nan,nan,0,0,0,0
+redis,benchmark,q1_user_by_id,1.2191038999999999,1000,1000,0,820.27462958653484,0.20150000000000001,0.29732500000000001,0.68863899999999989,1,1000,nan,nan,nan,nan,nan,0,0,0,0
+redis,benchmark,q3_user_by_login,1.2191038999999999,1000,1000,0,820.27462958653484,0.18509999999999999,0.45424999999999993,0.66730900000000004,1,1000,nan,nan,nan,nan,nan,0,0,0,0
