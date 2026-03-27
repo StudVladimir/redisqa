@@ -70,6 +70,18 @@
 						  ItemsSource="{Binding BenchmarkModeOptions}"/>
 				</Grid>
 
+				<Grid ColumnDefinitions="Auto,*" Margin="0,4,0,0" ColumnSpacing="10">
+					<TextBlock Text="Concurrent users (u)"
+							   VerticalAlignment="Center"
+							   FontSize="12"
+							   Foreground="#bdc3c7"/>
+
+					<ComboBox Grid.Column="1"
+						  Height="32"
+						  SelectedItem="{Binding BenchmarkConcurrentUsers, Mode=TwoWay}"
+						  ItemsSource="{Binding BenchmarkConcurrentUserOptions}"/>
+				</Grid>
+
 				<Grid ColumnDefinitions="Auto,*" Margin="0,4,0,0" ColumnSpacing="10" IsVisible="{Binding IsSingleBenchmarkMode}">
 					<TextBlock Text="Query name"
 							   VerticalAlignment="Center"

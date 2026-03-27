@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using redisqa.Services;
 
@@ -36,6 +37,7 @@ public class QueryViewModel : BaseViewModel
     private string _benchmarkQueryName = string.Empty;
     private string _benchmarkStatusMessage = string.Empty;
     private string _selectedBenchmarkMode = BenchmarkModeSequential;
+    private int _benchmarkConcurrentUsers = 1;
 
     public int SelectedDb
     {
@@ -102,6 +104,24 @@ public class QueryViewModel : BaseViewModel
 
     public bool IsSingleBenchmarkMode =>
         string.Equals(SelectedBenchmarkMode, BenchmarkModeSingleLegacy, StringComparison.Ordinal);
+
+    public ObservableCollection<int> BenchmarkConcurrentUserOptions { get; } = new() { 1, 10 };
+
+    public int BenchmarkConcurrentUsers
+    {
+        get => _benchmarkConcurrentUsers;
+        set
+        {
+            var normalized = value < 1 ? 1 : value;
+            if (_benchmarkConcurrentUsers == normalized)
+            {
+                return;
+            }
+
+            _benchmarkConcurrentUsers = normalized;
+            OnPropertyChanged();
+        }
+    }
 
     public bool IsBusy
     {
@@ -379,14 +399,15 @@ public class QueryViewModel : BaseViewModel
     private async Task RunSingleQueryBenchmarkAsync(string queryText, string queryName, int pageNumber, int pageSize)
     {
         IsBusy = true;
-        BenchmarkStatusMessage = $"Benchmark started: 0/{BenchmarkRepeatCount}";
+        BenchmarkStatusMessage =
+            $"Benchmark started: {BenchmarkRepeatCount} requests, u={BenchmarkConcurrentUsers}";
 
-        var serverRecords = new List<BenchmarkCsvRecord>(BenchmarkRepeatCount);
-        var clientRecords = new List<BenchmarkCsvRecord>(BenchmarkRepeatCount);
+        var serverRecords = new BenchmarkCsvRecord[BenchmarkRepeatCount];
+        var clientRecords = new BenchmarkCsvRecord[BenchmarkRepeatCount];
 
         try
         {
-            for (var index = 1; index <= BenchmarkRepeatCount; index++)
+            await RunConcurrentIterationsAsync(BenchmarkRepeatCount, BenchmarkConcurrentUsers, async index =>
             {
                 QueryExecutionResult iterationResult;
                 var clientStopwatch = Stopwatch.StartNew();
@@ -413,27 +434,25 @@ public class QueryViewModel : BaseViewModel
                     ? string.Empty
                     : iterationResult.ErrorMessage ?? "Query execution failed.";
 
-                serverRecords.Add(new BenchmarkCsvRecord(
+                serverRecords[index - 1] = new BenchmarkCsvRecord(
                     index,
                     queryName,
                     iterationResult.ServerLatencyMs,
                     rowsReturned,
                     iterationResult.IsSuccess,
-                    error));
+                    error);
 
-                clientRecords.Add(new BenchmarkCsvRecord(
+                clientRecords[index - 1] = new BenchmarkCsvRecord(
                     index,
                     queryName,
                     clientStopwatch.Elapsed.TotalMilliseconds,
                     rowsReturned,
                     iterationResult.IsSuccess,
-                    error));
+                    error);
+            });
 
-                if (index % 50 == 0 || index == BenchmarkRepeatCount)
-                {
-                    BenchmarkStatusMessage = $"Benchmark progress: {index}/{BenchmarkRepeatCount}";
-                }
-            }
+            BenchmarkStatusMessage =
+                $"Benchmark complete: {BenchmarkRepeatCount} requests finished, u={BenchmarkConcurrentUsers}. Saving CSV...";
 
             var outputDir = Path.Combine(Directory.GetCurrentDirectory(), "benchmark-results");
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
@@ -478,102 +497,97 @@ public class QueryViewModel : BaseViewModel
                 return;
             }
 
-            BenchmarkStatusMessage = $"Sequential benchmark warmup: 0/{SequentialWarmupRequestCount}";
+            BenchmarkStatusMessage =
+                $"Sequential benchmark warmup: {SequentialWarmupRequestCount} requests, u={BenchmarkConcurrentUsers}";
             TrySampleDocker("warmup", dockerSamples);
 
-            for (var index = 0; index < SequentialWarmupRequestCount; index++)
+            var warmupCommandStatsBefore = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+            var warmupClientRecords = new BenchmarkLatencyRecord[SequentialWarmupRequestCount];
+            var warmupServerRecords = new BenchmarkLatencyRecord[SequentialWarmupRequestCount];
+
+            await RunConcurrentIterationsAsync(SequentialWarmupRequestCount, BenchmarkConcurrentUsers, async requestIndex =>
             {
-                var definition = queryDefinitions[index % queryDefinitions.Count];
-                var query = definition.BuildQuery(index + 1);
-
-                var commandStatsBefore = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+                var arrayIndex = requestIndex - 1;
+                var definition = queryDefinitions[arrayIndex % queryDefinitions.Count];
+                var query = definition.BuildQuery(requestIndex);
                 var iteration = await ExecuteBenchmarkIterationAsync(query, pageNumber, pageSize);
-                var commandStatsAfter = await redisCommandStatsCollector.TryTakeSnapshotAsync();
-                var commandDelta = RedisCommandStatsCollector.BuildDelta(commandStatsBefore, commandStatsAfter);
 
-                AppendRedisCommandStats(
+                warmupClientRecords[arrayIndex] = new BenchmarkLatencyRecord(
                     "warmup",
-                    definition.QueryName,
-                    logicalRequests: 1,
-                    commandDelta,
-                    redisCommandStatsByQuery,
-                    redisPhaseTotals);
-
-                clientLatencyRecords.Add(new BenchmarkLatencyRecord(
-                    "warmup",
-                    index,
+                    arrayIndex,
                     definition.QueryName,
                     iteration.ClientLatencyMs,
                     iteration.RowsReturned,
                     iteration.IsSuccess,
-                    iteration.Error));
+                    iteration.Error);
 
-                serverLatencyRecords.Add(new BenchmarkLatencyRecord(
+                warmupServerRecords[arrayIndex] = new BenchmarkLatencyRecord(
                     "warmup",
-                    index,
+                    arrayIndex,
                     definition.QueryName,
                     iteration.ServerLatencyMs,
                     iteration.RowsReturned,
                     iteration.IsSuccess,
-                    iteration.Error));
+                    iteration.Error);
+            });
 
-                if ((index + 1) % 25 == 0 || index + 1 == SequentialWarmupRequestCount)
-                {
-                    BenchmarkStatusMessage = $"Sequential warmup progress: {index + 1}/{SequentialWarmupRequestCount}";
-                }
+            clientLatencyRecords.AddRange(warmupClientRecords);
+            serverLatencyRecords.AddRange(warmupServerRecords);
 
-                if ((index + 1) % 50 == 0)
-                {
-                    TrySampleDocker("warmup", dockerSamples);
-                }
-            }
+            var warmupCommandStatsAfter = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+            var warmupCommandDelta = RedisCommandStatsCollector.BuildDelta(warmupCommandStatsBefore, warmupCommandStatsAfter);
+
+            AppendRedisCommandStats(
+                "warmup",
+                "__warmup_mixed__",
+                SequentialWarmupRequestCount,
+                warmupCommandDelta,
+                redisCommandStatsByQuery,
+                redisPhaseTotals);
 
             TrySampleDocker("warmup", dockerSamples);
 
             var totalBenchmarkRequests = SequentialRequestsPerQuery * queryDefinitions.Count;
-            var benchmarkProgress = 0;
-            BenchmarkStatusMessage = $"Sequential benchmark: 0/{totalBenchmarkRequests}";
+            BenchmarkStatusMessage =
+                $"Sequential benchmark: {totalBenchmarkRequests} requests, u={BenchmarkConcurrentUsers}";
             TrySampleDocker("benchmark", dockerSamples);
 
-            foreach (var definition in queryDefinitions)
+            for (var queryIndex = 0; queryIndex < queryDefinitions.Count; queryIndex++)
             {
-                var queryCommandStatsBefore = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+                var definition = queryDefinitions[queryIndex];
+                BenchmarkStatusMessage =
+                    $"Sequential benchmark: {definition.QueryName} ({queryIndex + 1}/{queryDefinitions.Count}), u={BenchmarkConcurrentUsers}";
 
-                for (var iterationIndex = 1; iterationIndex <= SequentialRequestsPerQuery; iterationIndex++)
+                var queryCommandStatsBefore = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+                var benchmarkClientRecords = new BenchmarkLatencyRecord[SequentialRequestsPerQuery];
+                var benchmarkServerRecords = new BenchmarkLatencyRecord[SequentialRequestsPerQuery];
+
+                await RunConcurrentIterationsAsync(SequentialRequestsPerQuery, BenchmarkConcurrentUsers, async iterationIndex =>
                 {
                     var query = definition.BuildQuery(iterationIndex);
                     var iteration = await ExecuteBenchmarkIterationAsync(query, pageNumber, pageSize);
 
-                    clientLatencyRecords.Add(new BenchmarkLatencyRecord(
+                    benchmarkClientRecords[iterationIndex - 1] = new BenchmarkLatencyRecord(
                         "benchmark",
                         iterationIndex,
                         definition.QueryName,
                         iteration.ClientLatencyMs,
                         iteration.RowsReturned,
                         iteration.IsSuccess,
-                        iteration.Error));
+                        iteration.Error);
 
-                    serverLatencyRecords.Add(new BenchmarkLatencyRecord(
+                    benchmarkServerRecords[iterationIndex - 1] = new BenchmarkLatencyRecord(
                         "benchmark",
                         iterationIndex,
                         definition.QueryName,
                         iteration.ServerLatencyMs,
                         iteration.RowsReturned,
                         iteration.IsSuccess,
-                        iteration.Error));
+                        iteration.Error);
+                });
 
-                    benchmarkProgress++;
-
-                    if (benchmarkProgress % 50 == 0 || benchmarkProgress == totalBenchmarkRequests)
-                    {
-                        BenchmarkStatusMessage = $"Sequential benchmark progress: {benchmarkProgress}/{totalBenchmarkRequests}";
-                    }
-
-                    if (benchmarkProgress % 100 == 0)
-                    {
-                        TrySampleDocker("benchmark", dockerSamples);
-                    }
-                }
+                clientLatencyRecords.AddRange(benchmarkClientRecords);
+                serverLatencyRecords.AddRange(benchmarkServerRecords);
 
                 var queryCommandStatsAfter = await redisCommandStatsCollector.TryTakeSnapshotAsync();
                 var queryCommandDelta = RedisCommandStatsCollector.BuildDelta(queryCommandStatsBefore, queryCommandStatsAfter);
@@ -585,6 +599,11 @@ public class QueryViewModel : BaseViewModel
                     queryCommandDelta,
                     redisCommandStatsByQuery,
                     redisPhaseTotals);
+
+                if ((queryIndex + 1) % 2 == 0 || queryIndex + 1 == queryDefinitions.Count)
+                {
+                    TrySampleDocker("benchmark", dockerSamples);
+                }
             }
 
             TrySampleDocker("benchmark", dockerSamples);
@@ -714,6 +733,36 @@ public class QueryViewModel : BaseViewModel
         }
 
         return 1 + ((iterationIndex - 1) % maxValue);
+    }
+
+    private static async Task RunConcurrentIterationsAsync(int totalIterations, int concurrency, Func<int, Task> iterationAction)
+    {
+        if (totalIterations < 1)
+        {
+            return;
+        }
+
+        var workerCount = Math.Max(1, concurrency);
+        var current = 0;
+
+        var workers = Enumerable
+            .Range(0, workerCount)
+            .Select(async _ =>
+            {
+                while (true)
+                {
+                    var iterationIndex = Interlocked.Increment(ref current);
+                    if (iterationIndex > totalIterations)
+                    {
+                        break;
+                    }
+
+                    await iterationAction(iterationIndex);
+                }
+            })
+            .ToArray();
+
+        await Task.WhenAll(workers);
     }
 
     private async Task<List<string>> LoadUserLoginsAsync()
