@@ -59,6 +59,18 @@ public sealed record PhaseSummaryRecord(
     double BlockInDeltaBytes,
     double BlockOutDeltaBytes);
 
+public sealed record RedisCommandStatsRecord(
+    string Phase,
+    string QueryName,
+    string RedisCommand,
+    long CallsDelta,
+    long UsecDelta,
+    double AvgUsecPerCall,
+    long RejectedCallsDelta,
+    long FailedCallsDelta,
+    double CallsPerLogicalRequest,
+    double UsecPerLogicalRequest);
+
 public static class BenchmarkArtifacts
 {
     public static async Task WriteLatenciesAsync(string filePath, IReadOnlyList<BenchmarkLatencyRecord> records)
@@ -156,6 +168,35 @@ public static class BenchmarkArtifacts
                 FormatNumber(record.NetOutDeltaBytes),
                 FormatNumber(record.BlockInDeltaBytes),
                 FormatNumber(record.BlockOutDeltaBytes));
+
+            await writer.WriteLineAsync(line);
+        }
+    }
+
+    public static async Task WriteRedisCommandStatsAsync(string filePath, IReadOnlyList<RedisCommandStatsRecord> records)
+    {
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var writer = new StreamWriter(filePath, false, Encoding.UTF8);
+        await writer.WriteLineAsync("phase,query_name,redis_command,calls_delta,usec_delta,avg_usec_per_call,rejected_calls_delta,failed_calls_delta,calls_per_logical_request,usec_per_logical_request");
+
+        foreach (var record in records)
+        {
+            var line = string.Join(",",
+                EscapeCsv(record.Phase),
+                EscapeCsv(record.QueryName),
+                EscapeCsv(record.RedisCommand),
+                record.CallsDelta.ToString(CultureInfo.InvariantCulture),
+                record.UsecDelta.ToString(CultureInfo.InvariantCulture),
+                FormatNumber(record.AvgUsecPerCall),
+                record.RejectedCallsDelta.ToString(CultureInfo.InvariantCulture),
+                record.FailedCallsDelta.ToString(CultureInfo.InvariantCulture),
+                FormatNumber(record.CallsPerLogicalRequest),
+                FormatNumber(record.UsecPerLogicalRequest));
 
             await writer.WriteLineAsync(line);
         }

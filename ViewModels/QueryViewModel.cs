@@ -466,6 +466,9 @@ public class QueryViewModel : BaseViewModel
         var serverLatencyRecords = new List<BenchmarkLatencyRecord>(
             SequentialWarmupRequestCount + (SequentialRequestsPerQuery * Math.Max(1, queryDefinitions.Count)));
         var dockerSamples = new List<DockerStatsSample>();
+        var redisCommandStatsByQuery = new List<RedisCommandStatsRecord>();
+        var redisPhaseTotals = new Dictionary<(string Phase, string Command), RedisCommandCounters>();
+        var redisCommandStatsCollector = new RedisCommandStatsCollector();
 
         try
         {
@@ -482,7 +485,19 @@ public class QueryViewModel : BaseViewModel
             {
                 var definition = queryDefinitions[index % queryDefinitions.Count];
                 var query = definition.BuildQuery(index + 1);
+
+                var commandStatsBefore = await redisCommandStatsCollector.TryTakeSnapshotAsync();
                 var iteration = await ExecuteBenchmarkIterationAsync(query, pageNumber, pageSize);
+                var commandStatsAfter = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+                var commandDelta = RedisCommandStatsCollector.BuildDelta(commandStatsBefore, commandStatsAfter);
+
+                AppendRedisCommandStats(
+                    "warmup",
+                    definition.QueryName,
+                    logicalRequests: 1,
+                    commandDelta,
+                    redisCommandStatsByQuery,
+                    redisPhaseTotals);
 
                 clientLatencyRecords.Add(new BenchmarkLatencyRecord(
                     "warmup",
@@ -522,6 +537,8 @@ public class QueryViewModel : BaseViewModel
 
             foreach (var definition in queryDefinitions)
             {
+                var queryCommandStatsBefore = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+
                 for (var iterationIndex = 1; iterationIndex <= SequentialRequestsPerQuery; iterationIndex++)
                 {
                     var query = definition.BuildQuery(iterationIndex);
@@ -557,6 +574,17 @@ public class QueryViewModel : BaseViewModel
                         TrySampleDocker("benchmark", dockerSamples);
                     }
                 }
+
+                var queryCommandStatsAfter = await redisCommandStatsCollector.TryTakeSnapshotAsync();
+                var queryCommandDelta = RedisCommandStatsCollector.BuildDelta(queryCommandStatsBefore, queryCommandStatsAfter);
+
+                AppendRedisCommandStats(
+                    "benchmark",
+                    definition.QueryName,
+                    SequentialRequestsPerQuery,
+                    queryCommandDelta,
+                    redisCommandStatsByQuery,
+                    redisPhaseTotals);
             }
 
             TrySampleDocker("benchmark", dockerSamples);
@@ -576,10 +604,20 @@ public class QueryViewModel : BaseViewModel
             var dockerStatsPath = Path.Combine(outputDir, "docker_stats_samples.csv");
             var clientPhaseSummaryPath = Path.Combine(outputDir, "phase_summary_client.csv");
             var serverPhaseSummaryPath = Path.Combine(outputDir, "phase_summary_server.csv");
+            var redisCommandStatsByQueryPath = Path.Combine(outputDir, "redis_commandstats_by_query.csv");
+            var redisCommandStatsByPhasePath = Path.Combine(outputDir, "redis_commandstats_by_phase.csv");
 
             // Backward compatibility: keep legacy names as aliases of client metrics.
             var legacyLatenciesPath = Path.Combine(outputDir, "latencies.csv");
             var legacyPhaseSummaryPath = Path.Combine(outputDir, "phase_summary.csv");
+
+            var redisCommandStatsByPhase = BuildRedisPhaseRecords(
+                redisPhaseTotals,
+                new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    ["warmup"] = SequentialWarmupRequestCount,
+                    ["benchmark"] = totalBenchmarkRequests
+                });
 
             await BenchmarkArtifacts.WriteLatenciesAsync(clientLatenciesPath, clientLatencyRecords);
             await BenchmarkArtifacts.WriteLatenciesAsync(serverLatenciesPath, serverLatencyRecords);
@@ -588,9 +626,11 @@ public class QueryViewModel : BaseViewModel
             await BenchmarkArtifacts.WritePhaseSummaryAsync(clientPhaseSummaryPath, clientPhaseSummary);
             await BenchmarkArtifacts.WritePhaseSummaryAsync(serverPhaseSummaryPath, serverPhaseSummary);
             await BenchmarkArtifacts.WritePhaseSummaryAsync(legacyPhaseSummaryPath, clientPhaseSummary);
+            await BenchmarkArtifacts.WriteRedisCommandStatsAsync(redisCommandStatsByQueryPath, redisCommandStatsByQuery);
+            await BenchmarkArtifacts.WriteRedisCommandStatsAsync(redisCommandStatsByPhasePath, redisCommandStatsByPhase);
 
             BenchmarkStatusMessage =
-                $"Sequential benchmark complete. Client: {clientLatenciesPath}, {clientPhaseSummaryPath} | Server: {serverLatenciesPath}, {serverPhaseSummaryPath} | Docker: {dockerStatsPath}";
+                $"Sequential benchmark complete. Client: {clientLatenciesPath}, {clientPhaseSummaryPath} | Server: {serverLatenciesPath}, {serverPhaseSummaryPath} | Docker: {dockerStatsPath} | Redis commandstats: {redisCommandStatsByQueryPath}, {redisCommandStatsByPhasePath}";
         }
         finally
         {
@@ -742,6 +782,89 @@ public class QueryViewModel : BaseViewModel
         {
             sink.Add(sample);
         }
+    }
+
+    private static void AppendRedisCommandStats(
+        string phase,
+        string queryName,
+        int logicalRequests,
+        IReadOnlyDictionary<string, RedisCommandCounters> commandDelta,
+        ICollection<RedisCommandStatsRecord> byQuerySink,
+        IDictionary<(string Phase, string Command), RedisCommandCounters> phaseTotals)
+    {
+        foreach (var (command, counters) in commandDelta)
+        {
+            var avgUsecPerCall = counters.Calls > 0
+                ? counters.Usec / (double)counters.Calls
+                : double.NaN;
+
+            var callsPerLogicalRequest = logicalRequests > 0
+                ? counters.Calls / (double)logicalRequests
+                : 0d;
+
+            var usecPerLogicalRequest = logicalRequests > 0
+                ? counters.Usec / (double)logicalRequests
+                : 0d;
+
+            byQuerySink.Add(new RedisCommandStatsRecord(
+                phase,
+                queryName,
+                command,
+                counters.Calls,
+                counters.Usec,
+                avgUsecPerCall,
+                counters.RejectedCalls,
+                counters.FailedCalls,
+                callsPerLogicalRequest,
+                usecPerLogicalRequest));
+
+            var key = (phase, command);
+            if (phaseTotals.TryGetValue(key, out var existing))
+            {
+                phaseTotals[key] = existing.Add(counters);
+            }
+            else
+            {
+                phaseTotals[key] = counters;
+            }
+        }
+    }
+
+    private static List<RedisCommandStatsRecord> BuildRedisPhaseRecords(
+        IReadOnlyDictionary<(string Phase, string Command), RedisCommandCounters> phaseTotals,
+        IReadOnlyDictionary<string, int> logicalRequestsByPhase)
+    {
+        var records = new List<RedisCommandStatsRecord>(phaseTotals.Count);
+
+        foreach (var ((phase, command), counters) in phaseTotals.OrderBy(item => item.Key.Phase).ThenBy(item => item.Key.Command))
+        {
+            var logicalRequests = logicalRequestsByPhase.TryGetValue(phase, out var value) ? value : 0;
+            var avgUsecPerCall = counters.Calls > 0
+                ? counters.Usec / (double)counters.Calls
+                : double.NaN;
+
+            var callsPerLogicalRequest = logicalRequests > 0
+                ? counters.Calls / (double)logicalRequests
+                : 0d;
+
+            var usecPerLogicalRequest = logicalRequests > 0
+                ? counters.Usec / (double)logicalRequests
+                : 0d;
+
+            records.Add(new RedisCommandStatsRecord(
+                phase,
+                "__phase_total__",
+                command,
+                counters.Calls,
+                counters.Usec,
+                avgUsecPerCall,
+                counters.RejectedCalls,
+                counters.FailedCalls,
+                callsPerLogicalRequest,
+                usecPerLogicalRequest));
+        }
+
+        return records;
     }
 
     private static List<PhaseSummaryRecord> BuildPhaseSummary(
