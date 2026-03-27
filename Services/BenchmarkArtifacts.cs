@@ -191,53 +191,15 @@ public static class BenchmarkArtifacts
 public static class DockerStatsSampler
 {
     private const string DefaultContainerName = "dbb-redis";
+    private const string DockerStatsFormat = "{{json .}}";
 
     public static DockerStatsSample? TrySample(string phase)
     {
         try
         {
-            var containerName = Environment.GetEnvironmentVariable("REDISQA_DOCKER_CONTAINER");
-            if (string.IsNullOrWhiteSpace(containerName))
-            {
-                containerName = DefaultContainerName;
-            }
-
-            var processStartInfo = new ProcessStartInfo
-            {
-                FileName = "docker",
-                Arguments = $"stats {containerName} --no-stream --format {{json .}}",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(processStartInfo);
-            if (process == null)
+            if (!TryRunStats(DefaultContainerName, out var output) && !TryRunStats(containerName: null, out output))
             {
                 return null;
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(5000);
-
-            if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
-            {
-                // Fallback to generic stats when targeted container is unavailable.
-                processStartInfo.Arguments = "stats --no-stream --format {{json .}}";
-                using var fallbackProcess = Process.Start(processStartInfo);
-                if (fallbackProcess == null)
-                {
-                    return null;
-                }
-
-                output = fallbackProcess.StandardOutput.ReadToEnd();
-                fallbackProcess.WaitForExit(5000);
-
-                if (fallbackProcess.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
-                {
-                    return null;
-                }
             }
 
             var line = output
@@ -283,6 +245,47 @@ public static class DockerStatsSampler
         {
             return null;
         }
+    }
+
+    private static bool TryRunStats(string? containerName, out string output)
+    {
+        output = string.Empty;
+
+        var processStartInfo = new ProcessStartInfo
+        {
+            FileName = "docker",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        processStartInfo.ArgumentList.Add("stats");
+        if (!string.IsNullOrWhiteSpace(containerName))
+        {
+            processStartInfo.ArgumentList.Add(containerName);
+        }
+
+        processStartInfo.ArgumentList.Add("--no-stream");
+        processStartInfo.ArgumentList.Add("--format");
+        processStartInfo.ArgumentList.Add(DockerStatsFormat);
+
+        using var process = Process.Start(processStartInfo);
+        if (process == null)
+        {
+            return false;
+        }
+
+        var stdout = process.StandardOutput.ReadToEnd();
+        process.WaitForExit(5000);
+
+        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+        {
+            return false;
+        }
+
+        output = stdout;
+        return true;
     }
 
     private static string ReadString(JsonElement root, string property)
